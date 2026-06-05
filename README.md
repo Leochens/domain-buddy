@@ -23,3 +23,7 @@ npm run tauri dev
 ```bash
 npm run build
 ```
+
+图标母版：
+
+- `assets/domain-buddy-icon-transparent.png`
