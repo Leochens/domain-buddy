@@ -55,6 +55,7 @@ type RecordForm = {
 };
 
 const defaultEndpoint = "https://dnspod.tencentcloudapi.com";
+const recordTypes = ["A", "AAAA", "CNAME", "TXT", "MX", "NS", "CAA", "SRV"];
 const emptyRecordForm: RecordForm = {
   subDomain: "www",
   recordType: "A",
@@ -75,9 +76,115 @@ function isTauriRuntime() {
 
 async function invokeCommand<T>(command: string, args?: Record<string, unknown>) {
   if (!isTauriRuntime()) {
-    throw new Error("当前是浏览器预览模式，请在 Tauri 桌面应用中保存配置和调用腾讯云 API。");
+    throw new Error("浏览器预览模式不能调用腾讯云 API，请使用 Tauri 桌面应用。");
   }
   return invoke<T>(command, args);
+}
+
+function recordToForm(record: DnsRecord): RecordForm {
+  return {
+    recordId: record.recordId,
+    subDomain: record.name || "@",
+    recordType: record.recordType || "A",
+    recordLine: record.line || "默认",
+    value: record.value,
+    ttl: String(record.ttl || 600),
+    mx: String(record.mx || 0),
+    status: record.status === "DISABLE" ? "DISABLE" : "ENABLE",
+  };
+}
+
+function draftsFromRecords(records: DnsRecord[]) {
+  return records.reduce<Record<number, RecordForm>>((nextDrafts, record) => {
+    nextDrafts[record.recordId] = recordToForm(record);
+    return nextDrafts;
+  }, {});
+}
+
+function hasRecordChanges(record: DnsRecord, draft: RecordForm) {
+  const original = recordToForm(record);
+  return (
+    original.subDomain !== draft.subDomain.trim() ||
+    original.recordType !== draft.recordType ||
+    original.recordLine !== draft.recordLine.trim() ||
+    original.value !== draft.value.trim() ||
+    original.ttl !== draft.ttl.trim() ||
+    original.mx !== draft.mx.trim() ||
+    original.status !== draft.status
+  );
+}
+
+function recordTitle(record: DnsRecord, domain: string) {
+  return record.name === "@" ? domain : `${record.name}.${domain}`;
+}
+
+function RefreshIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M20 6v5h-5" />
+      <path d="M4 18v-5h5" />
+      <path d="M18.8 9A7 7 0 0 0 6.3 6.2L4 8.5" />
+      <path d="M5.2 15A7 7 0 0 0 17.7 17.8L20 15.5" />
+    </svg>
+  );
+}
+
+function SettingsIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z" />
+      <path d="M19.4 15a1.8 1.8 0 0 0 .4 2l.1.1a2 2 0 0 1-2.8 2.8l-.1-.1a1.8 1.8 0 0 0-2-.4 1.8 1.8 0 0 0-1.1 1.7V21a2 2 0 0 1-4 0v-.2a1.8 1.8 0 0 0-1.2-1.7 1.8 1.8 0 0 0-2 .4l-.1.1A2 2 0 0 1 3.8 17l.1-.1a1.8 1.8 0 0 0 .4-2 1.8 1.8 0 0 0-1.7-1.1H2.5a2 2 0 0 1 0-4h.2A1.8 1.8 0 0 0 4.3 8a1.8 1.8 0 0 0-.4-2l-.1-.1A2 2 0 1 1 6.6 3l.1.1a1.8 1.8 0 0 0 2 .4A1.8 1.8 0 0 0 9.8 2h.4a2 2 0 0 1 4 0v.2a1.8 1.8 0 0 0 1.1 1.7 1.8 1.8 0 0 0 2-.4l.1-.1A2 2 0 1 1 20.2 6l-.1.1a1.8 1.8 0 0 0-.4 2 1.8 1.8 0 0 0 1.7 1.1h.1a2 2 0 0 1 0 4h-.2a1.8 1.8 0 0 0-1.9 1.8Z" />
+    </svg>
+  );
+}
+
+function PlusIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M12 5v14" />
+      <path d="M5 12h14" />
+    </svg>
+  );
+}
+
+function SaveIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z" />
+      <path d="M17 21v-8H7v8" />
+      <path d="M7 3v5h8" />
+    </svg>
+  );
+}
+
+function UndoIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M9 14 4 9l5-5" />
+      <path d="M4 9h10a6 6 0 0 1 0 12h-3" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M3 6h18" />
+      <path d="M8 6V4h8v2" />
+      <path d="m6 6 1 15h10l1-15" />
+      <path d="M10 11v6" />
+      <path d="M14 11v6" />
+    </svg>
+  );
+}
+
+function CloseIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="m6 6 12 12" />
+      <path d="M18 6 6 18" />
+    </svg>
+  );
 }
 
 function App() {
@@ -89,55 +196,83 @@ function App() {
   const [domain, setDomain] = useState("");
   const [domains, setDomains] = useState<DomainSummary[]>([]);
   const [records, setRecords] = useState<DnsRecord[]>([]);
-  const [selectedRecordId, setSelectedRecordId] = useState<number | undefined>();
+  const [recordDrafts, setRecordDrafts] = useState<Record<number, RecordForm>>({});
   const [recordForm, setRecordForm] = useState<RecordForm>(emptyRecordForm);
-  const [notice, setNotice] = useState("请先保存腾讯云 SecretId 和 SecretKey。");
+  const [notice, setNotice] = useState("未连接 DNSPod");
   const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [configOpen, setConfigOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
   const desktopReady = useMemo(() => isTauriRuntime(), []);
 
-  const selectedRecord = useMemo(
-    () => records.find((record) => record.recordId === selectedRecordId),
-    [records, selectedRecordId],
+  const activeDomain = useMemo(
+    () => domains.find((item) => item.name === domain),
+    [domain, domains],
   );
 
   useEffect(() => {
     if (!desktopReady) {
-      setNotice("浏览器预览模式：界面可查看，保存配置和腾讯云 API 调用请使用 Tauri 桌面应用。");
+      setNotice("浏览器预览模式");
       return;
     }
 
     invokeCommand<PublicConfig | null>("load_config")
       .then((config) => {
-        if (!config) return;
+        if (!config) {
+          setConfigOpen(true);
+          return;
+        }
         setSecretId(config.secretId);
         setSecretKeySaved(config.secretKeySaved);
         setEndpoint(config.endpoint || defaultEndpoint);
         setRegion(config.region || "");
-        setNotice("已加载本地配置，可以直接验证连接。");
+        setNotice(config.secretKeySaved ? "配置已加载" : "未保存 Key");
       })
       .catch((error) => setNotice(toMessage(error)));
   }, [desktopReady]);
 
-  async function saveConfig() {
-    setBusy("save");
+  async function persistConfig() {
+    const config = await invokeCommand<PublicConfig>("save_config", {
+      config: {
+        secretId,
+        secretKey,
+        endpoint,
+        region,
+      },
+    });
+    setSecretKey("");
+    setSecretKeySaved(config.secretKeySaved);
+    setEndpoint(config.endpoint);
+    setRegion(config.region);
+    return config;
+  }
+
+  async function requestVerify() {
+    const result = await invokeCommand<VerifyResult>("verify_config");
+    setVerifyResult(result);
+    setDomains(result.domains || []);
+    setNotice(`已同步 ${result.domains?.length || 0} 个域名`);
+    return result;
+  }
+
+  async function saveConfig(verifyAfter = false) {
+    setBusy(verifyAfter ? "save-verify" : "save");
     setVerifyResult(null);
     try {
-      const config = await invokeCommand<PublicConfig>("save_config", {
-        config: {
-          secretId,
-          secretKey,
-          endpoint,
-          region,
-        },
-      });
-      setSecretKey("");
-      setSecretKeySaved(config.secretKeySaved);
-      setEndpoint(config.endpoint);
-      setRegion(config.region);
-      setDomains([]);
-      setRecords([]);
-      setNotice("配置已保存到本机应用配置目录。");
+      await persistConfig();
+      if (verifyAfter) {
+        const result = await requestVerify();
+        const firstDomain = result.domains?.[0]?.name;
+        if (!domain.trim() && firstDomain) {
+          await loadRecords(firstDomain);
+        }
+        setConfigOpen(false);
+      } else {
+        setDomains([]);
+        setRecords([]);
+        setRecordDrafts({});
+        setNotice("配置已保存");
+      }
     } catch (error) {
       setNotice(toMessage(error));
     } finally {
@@ -148,13 +283,12 @@ function App() {
   async function verifyConfig() {
     setBusy("verify");
     try {
-      const result = await invokeCommand<VerifyResult>("verify_config");
-      setVerifyResult(result);
-      setDomains(result.domains || []);
-      if (!domain.trim() && result.domains?.length) {
-        setDomain(result.domains[0].name);
+      const result = await requestVerify();
+      const nextDomain = domain.trim() || result.domains?.[0]?.name;
+      if (nextDomain) {
+        await loadRecords(nextDomain);
       }
-      setNotice(`${result.message}，已同步 ${result.domains?.length || 0} 个域名。`);
+      setConfigOpen(false);
     } catch (error) {
       setVerifyResult(null);
       setDomains([]);
@@ -164,22 +298,35 @@ function App() {
     }
   }
 
+  async function refreshCurrent() {
+    if (domain.trim()) {
+      await loadRecords(domain);
+      return;
+    }
+    if (secretKeySaved) {
+      await verifyConfig();
+      return;
+    }
+    setConfigOpen(true);
+  }
+
   async function loadRecords(nextDomain = domain) {
-    if (!nextDomain.trim()) {
-      setNotice("请输入要管理的主域名，例如 example.com。");
+    const cleanDomain = nextDomain.trim();
+    if (!cleanDomain) {
+      setNotice("未选择域名");
       return;
     }
 
     setBusy("list");
     try {
       const nextRecords = await invokeCommand<DnsRecord[]>("list_records", {
-        domain: nextDomain.trim(),
+        domain: cleanDomain,
       });
-      setDomain(nextDomain.trim());
+      setDomain(cleanDomain);
       setRecords(nextRecords);
-      setSelectedRecordId(undefined);
+      setRecordDrafts(draftsFromRecords(nextRecords));
       setRecordForm(emptyRecordForm);
-      setNotice(`已加载 ${nextRecords.length} 条解析记录。`);
+      setNotice(`${cleanDomain}：${nextRecords.length} 条记录`);
     } catch (error) {
       setNotice(toMessage(error));
     } finally {
@@ -187,55 +334,70 @@ function App() {
     }
   }
 
-  function editRecord(record: DnsRecord) {
-    setSelectedRecordId(record.recordId);
-    setRecordForm({
-      recordId: record.recordId,
-      subDomain: record.name || "@",
-      recordType: record.recordType || "A",
-      recordLine: record.line || "默认",
-      value: record.value,
-      ttl: String(record.ttl || 600),
-      mx: String(record.mx || 0),
-      status: record.status === "DISABLE" ? "DISABLE" : "ENABLE",
-    });
-    setNotice(`正在编辑 ${record.name}.${domain}。`);
+  function updateDraft(recordId: number, patch: Partial<RecordForm>) {
+    setRecordDrafts((current) => ({
+      ...current,
+      [recordId]: {
+        ...(current[recordId] || emptyRecordForm),
+        ...patch,
+      },
+    }));
   }
 
-  function resetForm() {
-    setSelectedRecordId(undefined);
-    setRecordForm(emptyRecordForm);
+  function resetDraft(record: DnsRecord) {
+    setRecordDrafts((current) => ({
+      ...current,
+      [record.recordId]: recordToForm(record),
+    }));
   }
 
-  function recordPayload() {
+  function recordPayload(form: RecordForm, recordId?: number) {
     return {
       domain: domain.trim(),
-      recordId: recordForm.recordId,
-      subDomain: recordForm.subDomain.trim(),
-      recordType: recordForm.recordType.trim(),
-      recordLine: recordForm.recordLine.trim(),
-      value: recordForm.value.trim(),
-      ttl: Number(recordForm.ttl || 600),
-      mx: Number(recordForm.mx || 0),
-      status: recordForm.status,
+      recordId,
+      subDomain: form.subDomain.trim(),
+      recordType: form.recordType.trim(),
+      recordLine: form.recordLine.trim(),
+      value: form.value.trim(),
+      ttl: Number(form.ttl || 600),
+      mx: Number(form.mx || 0),
+      status: form.status,
     };
   }
 
-  async function submitRecord() {
+  async function saveInlineRecord(record: DnsRecord) {
+    const draft = recordDrafts[record.recordId];
+    if (!draft || !hasRecordChanges(record, draft)) return;
+
+    setBusy(`update-${record.recordId}`);
+    try {
+      await invokeCommand("update_record", {
+        input: recordPayload(draft, record.recordId),
+      });
+      await loadRecords(domain);
+      setNotice(`${recordTitle(record, domain)} 已保存`);
+    } catch (error) {
+      setNotice(toMessage(error));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function createRecord() {
     if (!domain.trim()) {
-      setNotice("请先输入主域名。");
+      setNotice("未选择域名");
       return;
     }
 
-    const isEditing = Boolean(selectedRecordId);
-    setBusy(isEditing ? "update" : "create");
+    setBusy("create");
     try {
-      await invokeCommand(isEditing ? "update_record" : "create_record", {
-        input: recordPayload(),
+      await invokeCommand("create_record", {
+        input: recordPayload(recordForm),
       });
-      await loadRecords();
-      resetForm();
-      setNotice(isEditing ? "解析记录已修改。" : "解析记录已新增。");
+      setAddOpen(false);
+      setRecordForm(emptyRecordForm);
+      await loadRecords(domain);
+      setNotice("解析记录已新增");
     } catch (error) {
       setNotice(toMessage(error));
     } finally {
@@ -244,7 +406,7 @@ function App() {
   }
 
   async function removeRecord(record: DnsRecord) {
-    const fullName = record.name === "@" ? domain : `${record.name}.${domain}`;
+    const fullName = recordTitle(record, domain);
     const confirmed = window.confirm(`确认删除 ${fullName} 这条解析记录吗？`);
     if (!confirmed) return;
 
@@ -254,8 +416,8 @@ function App() {
         domain: domain.trim(),
         recordId: record.recordId,
       });
-      await loadRecords();
-      setNotice(`${fullName} 已删除。`);
+      await loadRecords(domain);
+      setNotice(`${fullName} 已删除`);
     } catch (error) {
       setNotice(toMessage(error));
     } finally {
@@ -265,204 +427,308 @@ function App() {
 
   return (
     <main className="app-shell">
-      <aside className="config-panel">
+      <header className="topbar">
         <div className="brand">
           <div className="brand-mark">DB</div>
           <div>
             <h1>Domain Buddy</h1>
-            <p>本地管理腾讯云 DNSPod 解析记录</p>
+            <p>{domain || "未选择域名"}</p>
           </div>
         </div>
 
-        <section className="panel-section">
-          <div className="section-heading">
-            <h2>腾讯云配置</h2>
-            <span>{secretKeySaved ? "已保存 Key" : "未保存 Key"}</span>
-          </div>
+        <div className="toolbar">
+          <span className={verifyResult?.ok ? "connection on" : "connection"}>
+            {notice}
+          </span>
+          <button
+            className="icon-button"
+            onClick={refreshCurrent}
+            disabled={busy !== null || !desktopReady}
+            title={domain ? "刷新解析记录" : "同步域名"}
+            aria-label={domain ? "刷新解析记录" : "同步域名"}
+          >
+            <RefreshIcon />
+          </button>
+          <button
+            className="primary-button"
+            onClick={() => {
+              setRecordForm(emptyRecordForm);
+              setAddOpen(true);
+            }}
+            disabled={!domain || busy !== null || !desktopReady}
+          >
+            <PlusIcon />
+            添加
+          </button>
+          <button
+            className="tool-button"
+            onClick={() => setConfigOpen(true)}
+            title="配置"
+          >
+            <SettingsIcon />
+            配置
+          </button>
+        </div>
+      </header>
 
-          <label>
-            SecretId
-            <input
-              value={secretId}
-              onChange={(event) => setSecretId(event.currentTarget.value)}
-              placeholder="AKID..."
-              spellCheck={false}
-            />
-          </label>
-
-          <label>
-            SecretKey
-            <input
-              value={secretKey}
-              onChange={(event) => setSecretKey(event.currentTarget.value)}
-              placeholder={secretKeySaved ? "留空则保留已保存 SecretKey" : "创建时展示一次的 SecretKey"}
-              spellCheck={false}
-              type="password"
-            />
-          </label>
-
-          <label>
-            API Endpoint
-            <input
-              value={endpoint}
-              onChange={(event) => setEndpoint(event.currentTarget.value)}
-              placeholder={defaultEndpoint}
-              spellCheck={false}
-            />
-          </label>
-
-          <label>
-            Region（可选）
-            <input
-              value={region}
-              onChange={(event) => setRegion(event.currentTarget.value)}
-              placeholder="通常可留空，例如 ap-guangzhou"
-              spellCheck={false}
-            />
-          </label>
-
-          <div className="button-row">
-            <button onClick={saveConfig} disabled={busy !== null || !desktopReady}>
-              {busy === "save" ? "保存中" : "保存配置"}
-            </button>
-            <button className="secondary" onClick={verifyConfig} disabled={busy !== null || !desktopReady}>
-              {busy === "verify" ? "验证中" : "验证连接"}
-            </button>
-          </div>
-        </section>
-
-        <section className="panel-section notice-section">
-          <div className={verifyResult?.ok ? "status ok" : "status"}>
-            <strong>{notice}</strong>
-            {verifyResult?.requestId && <span>RequestId: {verifyResult.requestId}</span>}
-            {typeof verifyResult?.domainCount === "number" && (
-              <span>账号域名数量：{verifyResult.domainCount}</span>
-            )}
-            {verifyResult && <span>已显示域名：{domains.length}</span>}
-          </div>
-        </section>
-      </aside>
-
-      <section className="workspace">
-        <header className="workspace-header">
-          <div>
-            <h2>解析记录</h2>
-            <p>先验证连接并选择主域名，加载后即可新增、修改或删除子域名记录。</p>
-          </div>
-          <div className="domain-search">
-            <input
-              value={domain}
-              onChange={(event) => setDomain(event.currentTarget.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") loadRecords();
-              }}
-              placeholder="example.com"
-              spellCheck={false}
-            />
-            <button onClick={() => loadRecords()} disabled={busy !== null || !desktopReady}>
-              {busy === "list" ? "加载中" : "加载记录"}
-            </button>
-          </div>
-        </header>
-
-        {domains.length > 0 && (
-          <section className="domain-list-panel">
-            <div className="domain-list-header">
-              <h2>账号域名</h2>
-              <span>{domains.length} 个域名，点击后加载解析记录</span>
-            </div>
-            <div className="domain-list">
-              {domains.map((item) => (
-                <button
-                  className={item.name === domain ? "domain-card active" : "domain-card"}
-                  key={item.domainId || item.name}
-                  onClick={() => loadRecords(item.name)}
-                  disabled={busy !== null || !desktopReady}
-                  title={item.remark || item.name}
-                >
-                  <strong>{item.name}</strong>
-                  <span>
-                    {item.status === "ENABLE" ? "启用" : "暂停"}
-                    {item.dnsStatus ? ` · DNS ${item.dnsStatus}` : ""}
-                    {` · ${item.recordCount} 条记录`}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </section>
+      <section className="domain-strip">
+        {domains.map((item) => (
+          <button
+            className={item.name === domain ? "domain-chip active" : "domain-chip"}
+            key={item.domainId || item.name}
+            onClick={() => loadRecords(item.name)}
+            disabled={busy !== null || !desktopReady}
+            title={item.remark || item.name}
+          >
+            <strong>{item.name}</strong>
+            <span>{item.recordCount} 条</span>
+          </button>
+        ))}
+        {!domains.length && (
+          <button className="domain-chip empty" onClick={() => setConfigOpen(true)}>
+            <strong>{secretKeySaved ? "同步域名" : "配置 DNSPod"}</strong>
+            <span>{desktopReady ? "Ready" : "Preview"}</span>
+          </button>
         )}
+      </section>
 
-        <div className="content-grid">
-          <section className="records-panel">
-            <div className="table-header">
-              <span>{records.length ? `${records.length} 条记录` : "暂无记录"}</span>
-              {selectedRecord && <em>正在编辑 RecordId {selectedRecord.recordId}</em>}
-            </div>
+      <section className="records-panel">
+        <div className="table-header">
+          <div>
+            <strong>{activeDomain?.name || domain || "解析记录"}</strong>
+            <span>{records.length} 条记录</span>
+          </div>
+          {activeDomain?.dnsStatus && <em>DNS {activeDomain.dnsStatus}</em>}
+        </div>
 
-            <div className="records-table">
-              <table>
-                <thead>
-                  <tr>
-                    <th>主机记录</th>
-                    <th>类型</th>
-                    <th>线路</th>
-                    <th>记录值</th>
-                    <th>TTL</th>
-                    <th>状态</th>
-                    <th>操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {records.map((record) => (
-                    <tr key={record.recordId} className={record.defaultNs ? "system-row" : ""}>
-                      <td>
-                        <strong>{record.name}</strong>
-                        <small>{record.recordId}</small>
-                      </td>
-                      <td>{record.recordType}</td>
-                      <td>{record.line}</td>
-                      <td className="value-cell">{record.value}</td>
-                      <td>{record.ttl}</td>
-                      <td>
-                        <span className={record.status === "ENABLE" ? "pill on" : "pill"}>
-                          {record.status === "ENABLE" ? "启用" : "暂停"}
-                        </span>
-                      </td>
-                      <td className="actions">
-                        <button className="ghost" onClick={() => editRecord(record)}>
-                          编辑
+        <div className="records-table">
+          <table>
+            <thead>
+              <tr>
+                <th>主机</th>
+                <th>类型</th>
+                <th>线路</th>
+                <th>记录值</th>
+                <th>TTL</th>
+                <th>状态</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {records.map((record) => {
+                const draft = recordDrafts[record.recordId] || recordToForm(record);
+                const changed = hasRecordChanges(record, draft);
+                const locked = record.defaultNs || busy !== null || !desktopReady;
+
+                return (
+                  <tr key={record.recordId} className={record.defaultNs ? "system-row" : ""}>
+                    <td>
+                      <input
+                        className="table-control host-control"
+                        value={draft.subDomain}
+                        onChange={(event) =>
+                          updateDraft(record.recordId, { subDomain: event.currentTarget.value })
+                        }
+                        disabled={locked}
+                        spellCheck={false}
+                      />
+                      <small>{record.recordId}</small>
+                    </td>
+                    <td>
+                      <select
+                        className="table-control"
+                        value={draft.recordType}
+                        onChange={(event) =>
+                          updateDraft(record.recordId, { recordType: event.currentTarget.value })
+                        }
+                        disabled={locked}
+                      >
+                        {recordTypes.map((type) => (
+                          <option key={type}>{type}</option>
+                        ))}
+                      </select>
+                    </td>
+                    <td>
+                      <input
+                        className="table-control line-control"
+                        value={draft.recordLine}
+                        onChange={(event) =>
+                          updateDraft(record.recordId, { recordLine: event.currentTarget.value })
+                        }
+                        disabled={locked}
+                        spellCheck={false}
+                      />
+                    </td>
+                    <td>
+                      <input
+                        className="table-control value-control"
+                        value={draft.value}
+                        onChange={(event) =>
+                          updateDraft(record.recordId, { value: event.currentTarget.value })
+                        }
+                        disabled={locked}
+                        spellCheck={false}
+                      />
+                    </td>
+                    <td>
+                      <input
+                        className="table-control ttl-control"
+                        value={draft.ttl}
+                        onChange={(event) =>
+                          updateDraft(record.recordId, { ttl: event.currentTarget.value })
+                        }
+                        disabled={locked}
+                        inputMode="numeric"
+                      />
+                    </td>
+                    <td>
+                      <select
+                        className="table-control status-control"
+                        value={draft.status}
+                        onChange={(event) =>
+                          updateDraft(record.recordId, {
+                            status: event.currentTarget.value as RecordForm["status"],
+                          })
+                        }
+                        disabled={locked}
+                      >
+                        <option value="ENABLE">启用</option>
+                        <option value="DISABLE">暂停</option>
+                      </select>
+                    </td>
+                    <td>
+                      <div className="row-actions">
+                        <button
+                          className="mini-button save"
+                          onClick={() => saveInlineRecord(record)}
+                          disabled={!changed || locked}
+                          title="保存"
+                          aria-label="保存"
+                        >
+                          <SaveIcon />
                         </button>
                         <button
-                          className="danger"
+                          className="mini-button"
+                          onClick={() => resetDraft(record)}
+                          disabled={!changed || locked}
+                          title="还原"
+                          aria-label="还原"
+                        >
+                          <UndoIcon />
+                        </button>
+                        <button
+                          className="mini-button danger"
                           onClick={() => removeRecord(record)}
                           disabled={record.defaultNs || busy === `delete-${record.recordId}` || !desktopReady}
-                          title={record.defaultNs ? "系统默认 NS 记录不建议删除" : "删除记录"}
+                          title={record.defaultNs ? "系统 NS 记录" : "删除"}
+                          aria-label="删除"
                         >
-                          {busy === `delete-${record.recordId}` ? "删除中" : "删除"}
+                          <TrashIcon />
                         </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {!records.length && (
-                <div className="empty-state">
-                  <strong>输入域名后加载记录</strong>
-                  <span>这里会列出 DNSPod 返回的全部解析记录，包括控制台隐藏的默认 NS 记录。</span>
-                </div>
-              )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+
+          {!records.length && (
+            <div className="empty-state">
+              <strong>{domain ? "暂无解析记录" : "未选择域名"}</strong>
+              <button className="primary-button" onClick={() => setConfigOpen(true)}>
+                <SettingsIcon />
+                {secretKeySaved ? "同步域名" : "配置"}
+              </button>
+            </div>
+          )}
+        </div>
+      </section>
+
+      {configOpen && (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal" role="dialog" aria-modal="true" aria-label="腾讯云配置">
+            <div className="modal-header">
+              <div>
+                <h2>腾讯云配置</h2>
+                <p>{secretKeySaved ? "已保存 Key" : "未保存 Key"}</p>
+              </div>
+              <button className="icon-button" onClick={() => setConfigOpen(false)} aria-label="关闭">
+                <CloseIcon />
+              </button>
+            </div>
+
+            <div className="modal-form">
+              <label>
+                SecretId
+                <input
+                  value={secretId}
+                  onChange={(event) => setSecretId(event.currentTarget.value)}
+                  placeholder="AKID..."
+                  spellCheck={false}
+                />
+              </label>
+              <label>
+                SecretKey
+                <input
+                  value={secretKey}
+                  onChange={(event) => setSecretKey(event.currentTarget.value)}
+                  placeholder={secretKeySaved ? "留空保留已保存 SecretKey" : "创建时展示一次的 SecretKey"}
+                  spellCheck={false}
+                  type="password"
+                />
+              </label>
+              <label>
+                API Endpoint
+                <input
+                  value={endpoint}
+                  onChange={(event) => setEndpoint(event.currentTarget.value)}
+                  placeholder={defaultEndpoint}
+                  spellCheck={false}
+                />
+              </label>
+              <label>
+                Region
+                <input
+                  value={region}
+                  onChange={(event) => setRegion(event.currentTarget.value)}
+                  placeholder="通常可留空"
+                  spellCheck={false}
+                />
+              </label>
+            </div>
+
+            <div className="modal-footer">
+              <button className="secondary-button" onClick={() => saveConfig(false)} disabled={busy !== null || !desktopReady}>
+                {busy === "save" ? "保存中" : "只保存"}
+              </button>
+              <button className="secondary-button" onClick={verifyConfig} disabled={busy !== null || !desktopReady || !secretKeySaved}>
+                {busy === "verify" ? "验证中" : "验证连接"}
+              </button>
+              <button className="primary-button" onClick={() => saveConfig(true)} disabled={busy !== null || !desktopReady}>
+                {busy === "save-verify" ? "处理中" : "保存并验证"}
+              </button>
             </div>
           </section>
+        </div>
+      )}
 
-          <section className="editor-panel">
-            <div className="section-heading">
-              <h2>{selectedRecordId ? "修改记录" : "新增记录"}</h2>
-              {selectedRecordId && <button className="ghost" onClick={resetForm}>取消编辑</button>}
+      {addOpen && (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal compact-modal" role="dialog" aria-modal="true" aria-label="添加记录">
+            <div className="modal-header">
+              <div>
+                <h2>添加记录</h2>
+                <p>{domain}</p>
+              </div>
+              <button className="icon-button" onClick={() => setAddOpen(false)} aria-label="关闭">
+                <CloseIcon />
+              </button>
             </div>
 
-            <div className="form-grid">
+            <div className="modal-form two-column">
               <label>
-                主机记录
+                主机
                 <input
                   value={recordForm.subDomain}
                   onChange={(event) =>
@@ -472,7 +738,6 @@ function App() {
                   spellCheck={false}
                 />
               </label>
-
               <label>
                 类型
                 <select
@@ -481,17 +746,11 @@ function App() {
                     setRecordForm({ ...recordForm, recordType: event.currentTarget.value })
                   }
                 >
-                  <option>A</option>
-                  <option>AAAA</option>
-                  <option>CNAME</option>
-                  <option>TXT</option>
-                  <option>MX</option>
-                  <option>NS</option>
-                  <option>CAA</option>
-                  <option>SRV</option>
+                  {recordTypes.map((type) => (
+                    <option key={type}>{type}</option>
+                  ))}
                 </select>
               </label>
-
               <label>
                 线路
                 <input
@@ -502,7 +761,6 @@ function App() {
                   placeholder="默认"
                 />
               </label>
-
               <label>
                 TTL
                 <input
@@ -513,7 +771,6 @@ function App() {
                   inputMode="numeric"
                 />
               </label>
-
               <label>
                 MX
                 <input
@@ -524,7 +781,6 @@ function App() {
                   inputMode="numeric"
                 />
               </label>
-
               <label>
                 状态
                 <select
@@ -540,7 +796,6 @@ function App() {
                   <option value="DISABLE">暂停</option>
                 </select>
               </label>
-
               <label className="span-2">
                 记录值
                 <textarea
@@ -554,21 +809,17 @@ function App() {
               </label>
             </div>
 
-            <div className="button-row align-end">
-              <button className="secondary" onClick={resetForm} disabled={busy !== null}>
-                清空
+            <div className="modal-footer">
+              <button className="secondary-button" onClick={() => setAddOpen(false)} disabled={busy !== null}>
+                取消
               </button>
-              <button onClick={submitRecord} disabled={busy !== null || !desktopReady}>
-                {busy === "create" || busy === "update"
-                  ? "提交中"
-                  : selectedRecordId
-                    ? "保存修改"
-                    : "新增记录"}
+              <button className="primary-button" onClick={createRecord} disabled={busy !== null || !desktopReady}>
+                {busy === "create" ? "添加中" : "添加记录"}
               </button>
             </div>
           </section>
         </div>
-      </section>
+      )}
     </main>
   );
 }
