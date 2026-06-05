@@ -172,7 +172,8 @@ label {
 
 .panel-section,
 .editor-panel,
-.records-panel {
+.records-panel,
+.domain-list-panel {
   background: #fffdf8;
   border: 1px solid #ded6c8;
   border-radius: 8px;
@@ -235,7 +236,7 @@ label {
 
 .workspace {
   display: grid;
-  grid-template-rows: auto 1fr;
+  grid-template-rows: auto auto 1fr;
   min-width: 0;
   padding: 28px;
 }
@@ -257,6 +258,74 @@ label {
   display: grid;
   grid-template-columns: 260px 96px;
   gap: 10px;
+}
+
+.domain-list-panel {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 18px;
+  padding: 14px 16px;
+}
+
+.domain-list-header {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.domain-list-header h2 {
+  font-size: 15px;
+  margin: 0;
+}
+
+.domain-list-header span {
+  color: #7a7d76;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.domain-list {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+button.domain-card {
+  background: #fbf7ef;
+  border: 1px solid #e4dacb;
+  color: #2b332e;
+  display: grid;
+  flex: 0 0 210px;
+  gap: 6px;
+  line-height: 1.25;
+  min-height: 68px;
+  padding: 12px;
+  text-align: left;
+}
+
+button.domain-card:hover:not(:disabled) {
+  background: #f4eee4;
+}
+
+button.domain-card.active {
+  background: #e6f1ea;
+  border-color: #4d8a76;
+}
+
+.domain-card strong {
+  color: #18211d;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.domain-card span {
+  color: #687069;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .content-grid {

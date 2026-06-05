@@ -61,6 +61,20 @@ struct VerifyResult {
     message: String,
     request_id: Option<String>,
     domain_count: Option<u64>,
+    domains: Vec<DomainSummary>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DomainSummary {
+    domain_id: i64,
+    name: String,
+    status: String,
+    dns_status: String,
+    grade_title: String,
+    record_count: u64,
+    remark: String,
+    updated_on: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -298,6 +312,28 @@ fn response_record_id(response: &Value) -> Option<i64> {
     response.get("RecordId").and_then(Value::as_i64)
 }
 
+fn domain_summaries(response: &Value) -> Vec<DomainSummary> {
+    response
+        .get("DomainList")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| DomainSummary {
+                    domain_id: value_as_i64(item, "DomainId"),
+                    name: value_as_string(item, "Name"),
+                    status: value_as_string(item, "Status"),
+                    dns_status: value_as_string(item, "DNSStatus"),
+                    grade_title: value_as_string(item, "GradeTitle"),
+                    record_count: value_as_u64(item, "RecordCount"),
+                    remark: value_as_string(item, "Remark"),
+                    updated_on: value_as_string(item, "UpdatedOn"),
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
 fn normalize_record_input(input: RecordInput) -> Result<RecordInput, String> {
     if input.domain.trim().is_empty() {
         return Err("域名不能为空".to_string());
@@ -388,8 +424,9 @@ async fn verify_config(app: tauri::AppHandle) -> Result<VerifyResult, String> {
         &app,
         "DescribeDomainList",
         json!({
+            "Type": "ALL",
             "Offset": 0,
-            "Limit": 1
+            "Limit": 3000
         }),
     )
     .await?;
@@ -404,6 +441,7 @@ async fn verify_config(app: tauri::AppHandle) -> Result<VerifyResult, String> {
         message: "腾讯云 DNSPod 连接成功，凭证和权限可用".to_string(),
         request_id: request_id(&response),
         domain_count,
+        domains: domain_summaries(&response),
     })
 }
 

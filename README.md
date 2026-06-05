@@ -5,8 +5,8 @@
 当前能力：
 
 - 保存腾讯云 `SecretId` / `SecretKey` 到本机应用配置目录。
-- 使用 `DescribeDomainList` 验证凭证和 DNSPod 权限。
-- 按主域名列出解析记录。
+- 使用 `DescribeDomainList` 验证凭证和 DNSPod 权限，并同步账号域名列表。
+- 点击账号域名后，按主域名列出解析记录。
 - 新增、修改、删除子域名解析记录。
 
 开发运行：
@@ -21,9 +21,3 @@ npm run tauri dev
 ```bash
 npm run build
 ```
-
-This template should help get you started developing with Tauri, React and Typescript in Vite.
-
-## Recommended IDE Setup
-
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)

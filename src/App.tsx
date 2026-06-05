@@ -14,6 +14,18 @@ type VerifyResult = {
   message: string;
   requestId?: string;
   domainCount?: number;
+  domains: DomainSummary[];
+};
+
+type DomainSummary = {
+  domainId: number;
+  name: string;
+  status: string;
+  dnsStatus: string;
+  gradeTitle: string;
+  recordCount: number;
+  remark: string;
+  updatedOn: string;
 };
 
 type DnsRecord = {
@@ -75,6 +87,7 @@ function App() {
   const [endpoint, setEndpoint] = useState(defaultEndpoint);
   const [region, setRegion] = useState("");
   const [domain, setDomain] = useState("");
+  const [domains, setDomains] = useState<DomainSummary[]>([]);
   const [records, setRecords] = useState<DnsRecord[]>([]);
   const [selectedRecordId, setSelectedRecordId] = useState<number | undefined>();
   const [recordForm, setRecordForm] = useState<RecordForm>(emptyRecordForm);
@@ -122,6 +135,8 @@ function App() {
       setSecretKeySaved(config.secretKeySaved);
       setEndpoint(config.endpoint);
       setRegion(config.region);
+      setDomains([]);
+      setRecords([]);
       setNotice("配置已保存到本机应用配置目录。");
     } catch (error) {
       setNotice(toMessage(error));
@@ -135,9 +150,14 @@ function App() {
     try {
       const result = await invokeCommand<VerifyResult>("verify_config");
       setVerifyResult(result);
-      setNotice(result.message);
+      setDomains(result.domains || []);
+      if (!domain.trim() && result.domains?.length) {
+        setDomain(result.domains[0].name);
+      }
+      setNotice(`${result.message}，已同步 ${result.domains?.length || 0} 个域名。`);
     } catch (error) {
       setVerifyResult(null);
+      setDomains([]);
       setNotice(toMessage(error));
     } finally {
       setBusy(null);
@@ -155,6 +175,7 @@ function App() {
       const nextRecords = await invokeCommand<DnsRecord[]>("list_records", {
         domain: nextDomain.trim(),
       });
+      setDomain(nextDomain.trim());
       setRecords(nextRecords);
       setSelectedRecordId(undefined);
       setRecordForm(emptyRecordForm);
@@ -317,6 +338,7 @@ function App() {
             {typeof verifyResult?.domainCount === "number" && (
               <span>账号域名数量：{verifyResult.domainCount}</span>
             )}
+            {verifyResult && <span>已显示域名：{domains.length}</span>}
           </div>
         </section>
       </aside>
@@ -325,7 +347,7 @@ function App() {
         <header className="workspace-header">
           <div>
             <h2>解析记录</h2>
-            <p>先输入主域名，加载后即可新增、修改或删除子域名记录。</p>
+            <p>先验证连接并选择主域名，加载后即可新增、修改或删除子域名记录。</p>
           </div>
           <div className="domain-search">
             <input
@@ -342,6 +364,33 @@ function App() {
             </button>
           </div>
         </header>
+
+        {domains.length > 0 && (
+          <section className="domain-list-panel">
+            <div className="domain-list-header">
+              <h2>账号域名</h2>
+              <span>{domains.length} 个域名，点击后加载解析记录</span>
+            </div>
+            <div className="domain-list">
+              {domains.map((item) => (
+                <button
+                  className={item.name === domain ? "domain-card active" : "domain-card"}
+                  key={item.domainId || item.name}
+                  onClick={() => loadRecords(item.name)}
+                  disabled={busy !== null || !desktopReady}
+                  title={item.remark || item.name}
+                >
+                  <strong>{item.name}</strong>
+                  <span>
+                    {item.status === "ENABLE" ? "启用" : "暂停"}
+                    {item.dnsStatus ? ` · DNS ${item.dnsStatus}` : ""}
+                    {` · ${item.recordCount} 条记录`}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
 
         <div className="content-grid">
           <section className="records-panel">
