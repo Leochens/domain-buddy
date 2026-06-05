@@ -1,0 +1,413 @@
+:root {
+  color: #1e2420;
+  background: #f4f2ec;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 960px;
+  min-height: 100vh;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button {
+  border: 0;
+  border-radius: 7px;
+  background: #145c48;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 11px 14px;
+  transition:
+    background 160ms ease,
+    transform 160ms ease,
+    opacity 160ms ease;
+}
+
+button:hover:not(:disabled) {
+  background: #0f4b3a;
+}
+
+button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+button.secondary {
+  background: #e8e0d4;
+  color: #2c2f2a;
+}
+
+button.secondary:hover:not(:disabled) {
+  background: #ded2c2;
+}
+
+button.ghost {
+  background: transparent;
+  color: #356153;
+  padding: 8px 4px;
+}
+
+button.ghost:hover:not(:disabled) {
+  background: transparent;
+  color: #0f4b3a;
+}
+
+button.danger {
+  background: #f3dfd7;
+  color: #8a3320;
+}
+
+button.danger:hover:not(:disabled) {
+  background: #eecabd;
+}
+
+input,
+select,
+textarea {
+  width: 100%;
+  border: 1px solid #d8d1c4;
+  border-radius: 7px;
+  background: #fffdf8;
+  color: #1e2420;
+  font-size: 13px;
+  line-height: 1.35;
+  outline: none;
+  padding: 11px 12px;
+}
+
+textarea {
+  min-height: 108px;
+  resize: vertical;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: #4d8a76;
+  box-shadow: 0 0 0 3px rgba(77, 138, 118, 0.16);
+}
+
+label {
+  color: #5a625b;
+  display: grid;
+  font-size: 12px;
+  font-weight: 700;
+  gap: 7px;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-columns: 360px minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.config-panel {
+  background: #fffcf6;
+  border-right: 1px solid #ded6c8;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 28px;
+}
+
+.brand {
+  align-items: center;
+  display: flex;
+  gap: 14px;
+}
+
+.brand-mark {
+  align-items: center;
+  background: #1d6b56;
+  border-radius: 8px;
+  color: #fffaf1;
+  display: flex;
+  font-size: 15px;
+  font-weight: 900;
+  height: 46px;
+  justify-content: center;
+  letter-spacing: 0.04em;
+  width: 46px;
+}
+
+.brand h1,
+.workspace-header h2,
+.section-heading h2 {
+  margin: 0;
+}
+
+.brand h1 {
+  font-size: 22px;
+  line-height: 1.1;
+}
+
+.brand p,
+.workspace-header p {
+  color: #6c7068;
+  font-size: 13px;
+  margin: 5px 0 0;
+}
+
+.panel-section,
+.editor-panel,
+.records-panel {
+  background: #fffdf8;
+  border: 1px solid #ded6c8;
+  border-radius: 8px;
+}
+
+.panel-section {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.section-heading {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.section-heading h2 {
+  font-size: 15px;
+}
+
+.section-heading span,
+.table-header span {
+  color: #7a5c35;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.button-row {
+  display: flex;
+  gap: 10px;
+}
+
+.align-end {
+  justify-content: flex-end;
+}
+
+.notice-section {
+  margin-top: auto;
+}
+
+.status {
+  border-left: 3px solid #b7784d;
+  color: #4c4238;
+  display: grid;
+  font-size: 13px;
+  gap: 5px;
+  padding-left: 12px;
+}
+
+.status.ok {
+  border-left-color: #1d6b56;
+}
+
+.status span {
+  color: #7a7d76;
+  font-size: 12px;
+}
+
+.workspace {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  min-width: 0;
+  padding: 28px;
+}
+
+.workspace-header {
+  align-items: center;
+  display: flex;
+  gap: 24px;
+  justify-content: space-between;
+  margin-bottom: 22px;
+}
+
+.workspace-header h2 {
+  font-size: 26px;
+  letter-spacing: 0;
+}
+
+.domain-search {
+  display: grid;
+  grid-template-columns: 260px 96px;
+  gap: 10px;
+}
+
+.content-grid {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(0, 1fr) 330px;
+  min-height: 0;
+}
+
+.records-panel {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.table-header {
+  align-items: center;
+  border-bottom: 1px solid #e5ded2;
+  display: flex;
+  height: 48px;
+  justify-content: space-between;
+  padding: 0 16px;
+}
+
+.table-header em {
+  color: #6d756e;
+  font-size: 12px;
+  font-style: normal;
+}
+
+.records-table {
+  max-height: calc(100vh - 160px);
+  min-height: 460px;
+  overflow: auto;
+  position: relative;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+th {
+  background: #fffdf8;
+  border-bottom: 1px solid #e5ded2;
+  color: #777a73;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  padding: 11px 14px;
+  position: sticky;
+  text-align: left;
+  text-transform: uppercase;
+  top: 0;
+  z-index: 1;
+}
+
+td {
+  border-bottom: 1px solid #eee8dc;
+  color: #262b27;
+  font-size: 13px;
+  padding: 12px 14px;
+  vertical-align: middle;
+}
+
+td strong {
+  display: block;
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+td small {
+  color: #8c8f87;
+  display: block;
+  font-size: 11px;
+  margin-top: 3px;
+}
+
+.system-row {
+  background: #fbf8f0;
+}
+
+.value-cell {
+  color: #2b6655;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pill {
+  background: #eee2d7;
+  border-radius: 999px;
+  color: #79513b;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 5px 8px;
+}
+
+.pill.on {
+  background: #dcebe2;
+  color: #21634c;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  min-width: 124px;
+}
+
+.empty-state {
+  align-items: center;
+  color: #777a73;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  inset: 0;
+  justify-content: center;
+  padding: 24px;
+  position: absolute;
+  text-align: center;
+}
+
+.empty-state strong {
+  color: #313631;
+  font-size: 17px;
+}
+
+.editor-panel {
+  align-self: start;
+  display: grid;
+  gap: 16px;
+  padding: 16px;
+}
+
+.form-grid {
+  display: grid;
+  gap: 13px;
+  grid-template-columns: 1fr 1fr;
+}
+
+.span-2 {
+  grid-column: span 2;
+}
+
+@media (max-width: 1050px) {
+  .content-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .editor-panel {
+    align-self: stretch;
+  }
+}
