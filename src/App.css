@@ -49,6 +49,7 @@ button svg {
 input,
 select,
 textarea {
+  appearance: none;
   width: 100%;
   border: 1px solid #d7ded8;
   border-radius: 7px;
@@ -58,6 +59,20 @@ textarea {
   line-height: 1.35;
   outline: none;
   padding: 9px 10px;
+}
+
+select {
+  background-image:
+    linear-gradient(45deg, transparent 50%, #66726b 50%),
+    linear-gradient(135deg, #66726b 50%, transparent 50%);
+  background-position:
+    calc(100% - 15px) calc(50% - 2px),
+    calc(100% - 10px) calc(50% - 2px);
+  background-repeat: no-repeat;
+  background-size:
+    5px 5px,
+    5px 5px;
+  padding-right: 30px;
 }
 
 textarea {
@@ -235,11 +250,10 @@ label {
 }
 
 .domain-strip {
-  display: flex;
-  gap: 8px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
   margin: 18px 0 14px;
-  overflow-x: auto;
-  padding-bottom: 2px;
 }
 
 .domain-chip {
@@ -248,11 +262,10 @@ label {
   border-radius: 8px;
   color: #23312a;
   display: grid;
-  flex: 0 0 auto;
-  gap: 3px;
+  gap: 6px;
   line-height: 1.2;
-  min-width: 170px;
-  padding: 10px 12px;
+  min-width: 0;
+  padding: 12px;
   text-align: left;
 }
 
@@ -280,6 +293,18 @@ label {
   color: #6b7670;
   font-size: 11px;
   font-weight: 750;
+}
+
+.provider-badge {
+  align-self: start;
+  background: #edf3ef;
+  border-radius: 999px;
+  color: #176247 !important;
+  display: inline-flex;
+  font-size: 10px !important;
+  font-weight: 850 !important;
+  padding: 4px 7px;
+  width: fit-content;
 }
 
 .records-panel {
@@ -331,7 +356,7 @@ label {
 
 table {
   border-collapse: collapse;
-  min-width: 980px;
+  min-width: 1200px;
   width: 100%;
 }
 
@@ -378,6 +403,20 @@ td small {
   padding: 6px 7px;
 }
 
+select.table-control {
+  background-image:
+    linear-gradient(45deg, transparent 50%, #66726b 50%),
+    linear-gradient(135deg, #66726b 50%, transparent 50%);
+  background-position:
+    calc(100% - 13px) calc(50% - 2px),
+    calc(100% - 8px) calc(50% - 2px);
+  background-repeat: no-repeat;
+  background-size:
+    5px 5px,
+    5px 5px;
+  padding-right: 26px;
+}
+
 .table-control:hover:not(:disabled) {
   background: #f5f8f6;
   border-color: #dfe6e0;
@@ -408,6 +447,10 @@ td small {
   color: #176247;
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   min-width: 260px;
+}
+
+.remark-control {
+  min-width: 160px;
 }
 
 .row-actions {
@@ -452,9 +495,9 @@ td small {
   box-shadow: 0 24px 80px rgba(17, 31, 24, 0.18);
   display: grid;
   gap: 18px;
-  max-width: 560px;
+  max-width: 620px;
   padding: 18px;
-  width: min(560px, 100%);
+  width: min(620px, 100%);
 }
 
 .compact-modal {
@@ -483,6 +526,7 @@ td small {
 .modal-form {
   display: grid;
   gap: 13px;
+  grid-template-columns: 1fr 1fr;
 }
 
 .modal-form.two-column {
@@ -505,6 +549,6 @@ td small {
   }
 
   table {
-    min-width: 920px;
+    min-width: 1120px;
   }
 }

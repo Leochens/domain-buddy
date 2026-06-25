@@ -2,7 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
 
+type ProviderKey = "tencent" | "cloudflare" | "aliyun";
+
 type PublicConfig = {
+  provider: ProviderKey;
   secretId: string;
   secretKeySaved: boolean;
   endpoint: string;
@@ -18,7 +21,9 @@ type VerifyResult = {
 };
 
 type DomainSummary = {
-  domainId: number;
+  domainId: string;
+  provider: ProviderKey;
+  providerLabel: string;
   name: string;
   status: string;
   dnsStatus: string;
@@ -29,7 +34,7 @@ type DomainSummary = {
 };
 
 type DnsRecord = {
-  recordId: number;
+  recordId: string;
   name: string;
   recordType: string;
   line: string;
@@ -44,7 +49,7 @@ type DnsRecord = {
 };
 
 type RecordForm = {
-  recordId?: number;
+  recordId?: string;
   subDomain: string;
   recordType: string;
   recordLine: string;
@@ -52,10 +57,66 @@ type RecordForm = {
   ttl: string;
   mx: string;
   status: "ENABLE" | "DISABLE";
+  remark: string;
 };
 
-const defaultEndpoint = "https://dnspod.tencentcloudapi.com";
-const recordTypes = ["A", "AAAA", "CNAME", "TXT", "MX", "NS", "CAA", "SRV"];
+type ProviderOption = {
+  value: ProviderKey;
+  label: string;
+  shortLabel: string;
+  status: string;
+  endpoint: string;
+  secretIdLabel: string;
+  secretIdPlaceholder: string;
+  secretKeyLabel: string;
+  secretKeyPlaceholder: string;
+  regionLabel: string;
+  regionPlaceholder: string;
+};
+
+const providerOptions: ProviderOption[] = [
+  {
+    value: "tencent",
+    label: "腾讯云 DNSPod",
+    shortLabel: "DNSPod",
+    status: "已支持",
+    endpoint: "https://dnspod.tencentcloudapi.com",
+    secretIdLabel: "SecretId",
+    secretIdPlaceholder: "AKID...",
+    secretKeyLabel: "SecretKey",
+    secretKeyPlaceholder: "创建时展示一次的 SecretKey",
+    regionLabel: "Region",
+    regionPlaceholder: "通常可留空",
+  },
+  {
+    value: "cloudflare",
+    label: "Cloudflare",
+    shortLabel: "Cloudflare",
+    status: "已支持",
+    endpoint: "https://api.cloudflare.com/client/v4",
+    secretIdLabel: "Account ID",
+    secretIdPlaceholder: "可选，留空也可以",
+    secretKeyLabel: "API Token",
+    secretKeyPlaceholder: "需要 Zone Read / DNS Edit 权限",
+    regionLabel: "Region",
+    regionPlaceholder: "Cloudflare 可留空",
+  },
+  {
+    value: "aliyun",
+    label: "阿里云 DNS",
+    shortLabel: "Aliyun",
+    status: "配置预留",
+    endpoint: "https://alidns.aliyuncs.com",
+    secretIdLabel: "AccessKeyId",
+    secretIdPlaceholder: "LTAI...",
+    secretKeyLabel: "AccessKeySecret",
+    secretKeyPlaceholder: "阿里云访问密钥",
+    regionLabel: "Region",
+    regionPlaceholder: "例如 cn-hangzhou",
+  },
+];
+
+const recordTypes = ["A", "AAAA", "CNAME", "TXT", "MX", "NS", "CAA", "SRV", "HTTPS", "SVCB"];
 const emptyRecordForm: RecordForm = {
   subDomain: "www",
   recordType: "A",
@@ -64,7 +125,12 @@ const emptyRecordForm: RecordForm = {
   ttl: "600",
   mx: "0",
   status: "ENABLE",
+  remark: "",
 };
+
+function providerMeta(provider: ProviderKey) {
+  return providerOptions.find((item) => item.value === provider) || providerOptions[0];
+}
 
 function toMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
@@ -76,7 +142,7 @@ function isTauriRuntime() {
 
 async function invokeCommand<T>(command: string, args?: Record<string, unknown>) {
   if (!isTauriRuntime()) {
-    throw new Error("浏览器预览模式不能调用腾讯云 API，请使用 Tauri 桌面应用。");
+    throw new Error("浏览器预览模式不能调用供应商 API，请使用 Tauri 桌面应用。");
   }
   return invoke<T>(command, args);
 }
@@ -91,11 +157,12 @@ function recordToForm(record: DnsRecord): RecordForm {
     ttl: String(record.ttl || 600),
     mx: String(record.mx || 0),
     status: record.status === "DISABLE" ? "DISABLE" : "ENABLE",
+    remark: record.remark || "",
   };
 }
 
 function draftsFromRecords(records: DnsRecord[]) {
-  return records.reduce<Record<number, RecordForm>>((nextDrafts, record) => {
+  return records.reduce<Record<string, RecordForm>>((nextDrafts, record) => {
     nextDrafts[record.recordId] = recordToForm(record);
     return nextDrafts;
   }, {});
@@ -110,7 +177,8 @@ function hasRecordChanges(record: DnsRecord, draft: RecordForm) {
     original.value !== draft.value.trim() ||
     original.ttl !== draft.ttl.trim() ||
     original.mx !== draft.mx.trim() ||
-    original.status !== draft.status
+    original.status !== draft.status ||
+    original.remark !== draft.remark.trim()
   );
 }
 
@@ -188,26 +256,32 @@ function CloseIcon() {
 }
 
 function App() {
+  const [provider, setProvider] = useState<ProviderKey>("tencent");
   const [secretId, setSecretId] = useState("");
   const [secretKey, setSecretKey] = useState("");
   const [secretKeySaved, setSecretKeySaved] = useState(false);
-  const [endpoint, setEndpoint] = useState(defaultEndpoint);
+  const [endpoint, setEndpoint] = useState(providerMeta("tencent").endpoint);
   const [region, setRegion] = useState("");
   const [domain, setDomain] = useState("");
   const [domains, setDomains] = useState<DomainSummary[]>([]);
   const [records, setRecords] = useState<DnsRecord[]>([]);
-  const [recordDrafts, setRecordDrafts] = useState<Record<number, RecordForm>>({});
+  const [recordDrafts, setRecordDrafts] = useState<Record<string, RecordForm>>({});
   const [recordForm, setRecordForm] = useState<RecordForm>(emptyRecordForm);
-  const [notice, setNotice] = useState("未连接 DNSPod");
+  const [notice, setNotice] = useState("未连接供应商");
   const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [configOpen, setConfigOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const desktopReady = useMemo(() => isTauriRuntime(), []);
 
+  const activeProvider = providerMeta(provider);
   const activeDomain = useMemo(
     () => domains.find((item) => item.name === domain),
     [domain, domains],
+  );
+  const recordValueOptions = useMemo(
+    () => Array.from(new Set(records.map((record) => record.value).filter(Boolean))).sort(),
+    [records],
   );
 
   useEffect(() => {
@@ -222,27 +296,50 @@ function App() {
           setConfigOpen(true);
           return;
         }
+        const nextProvider = config.provider || "tencent";
+        setProvider(nextProvider);
         setSecretId(config.secretId);
         setSecretKeySaved(config.secretKeySaved);
-        setEndpoint(config.endpoint || defaultEndpoint);
+        setEndpoint(config.endpoint || providerMeta(nextProvider).endpoint);
         setRegion(config.region || "");
-        setNotice(config.secretKeySaved ? "配置已加载" : "未保存 Key");
+        setNotice(config.secretKeySaved ? `${providerMeta(nextProvider).shortLabel} 配置已加载` : "未保存凭证");
       })
       .catch((error) => setNotice(toMessage(error)));
   }, [desktopReady]);
 
+  function resetProviderData() {
+    setVerifyResult(null);
+    setDomains([]);
+    setDomain("");
+    setRecords([]);
+    setRecordDrafts({});
+  }
+
+  function changeProvider(nextProvider: ProviderKey) {
+    setProvider(nextProvider);
+    setEndpoint(providerMeta(nextProvider).endpoint);
+    setSecretId("");
+    setSecretKey("");
+    setSecretKeySaved(false);
+    resetProviderData();
+    setNotice(`${providerMeta(nextProvider).shortLabel} 未验证`);
+  }
+
   async function persistConfig() {
     const config = await invokeCommand<PublicConfig>("save_config", {
       config: {
+        provider,
         secretId,
         secretKey,
         endpoint,
         region,
       },
     });
+    const nextProvider = config.provider || provider;
+    setProvider(nextProvider);
     setSecretKey("");
     setSecretKeySaved(config.secretKeySaved);
-    setEndpoint(config.endpoint);
+    setEndpoint(config.endpoint || providerMeta(nextProvider).endpoint);
     setRegion(config.region);
     return config;
   }
@@ -268,9 +365,7 @@ function App() {
         }
         setConfigOpen(false);
       } else {
-        setDomains([]);
-        setRecords([]);
-        setRecordDrafts({});
+        resetProviderData();
         setNotice("配置已保存");
       }
     } catch (error) {
@@ -334,7 +429,7 @@ function App() {
     }
   }
 
-  function updateDraft(recordId: number, patch: Partial<RecordForm>) {
+  function updateDraft(recordId: string, patch: Partial<RecordForm>) {
     setRecordDrafts((current) => ({
       ...current,
       [recordId]: {
@@ -351,7 +446,7 @@ function App() {
     }));
   }
 
-  function recordPayload(form: RecordForm, recordId?: number) {
+  function recordPayload(form: RecordForm, recordId?: string) {
     return {
       domain: domain.trim(),
       recordId,
@@ -362,6 +457,7 @@ function App() {
       ttl: Number(form.ttl || 600),
       mx: Number(form.mx || 0),
       status: form.status,
+      remark: form.remark.trim(),
     };
   }
 
@@ -432,7 +528,10 @@ function App() {
           <div className="brand-mark">DB</div>
           <div>
             <h1>Domain Buddy</h1>
-            <p>{domain || "未选择域名"}</p>
+            <p>
+              {activeProvider.shortLabel}
+              {domain ? ` · ${domain}` : " · 未选择域名"}
+            </p>
           </div>
         </div>
 
@@ -460,11 +559,7 @@ function App() {
             <PlusIcon />
             添加
           </button>
-          <button
-            className="tool-button"
-            onClick={() => setConfigOpen(true)}
-            title="配置"
-          >
+          <button className="tool-button" onClick={() => setConfigOpen(true)} title="配置">
             <SettingsIcon />
             配置
           </button>
@@ -475,19 +570,21 @@ function App() {
         {domains.map((item) => (
           <button
             className={item.name === domain ? "domain-chip active" : "domain-chip"}
-            key={item.domainId || item.name}
+            key={`${item.provider}-${item.domainId || item.name}`}
             onClick={() => loadRecords(item.name)}
             disabled={busy !== null || !desktopReady}
             title={item.remark || item.name}
           >
+            <span className="provider-badge">{item.providerLabel}</span>
             <strong>{item.name}</strong>
-            <span>{item.recordCount} 条</span>
+            <span>{item.recordCount ? `${item.recordCount} 条记录` : item.status || "可用"}</span>
           </button>
         ))}
         {!domains.length && (
           <button className="domain-chip empty" onClick={() => setConfigOpen(true)}>
-            <strong>{secretKeySaved ? "同步域名" : "配置 DNSPod"}</strong>
-            <span>{desktopReady ? "Ready" : "Preview"}</span>
+            <span className="provider-badge">{activeProvider.shortLabel}</span>
+            <strong>{secretKeySaved ? "同步域名" : `配置 ${activeProvider.shortLabel}`}</strong>
+            <span>{desktopReady ? activeProvider.status : "Preview"}</span>
           </button>
         )}
       </section>
@@ -498,8 +595,14 @@ function App() {
             <strong>{activeDomain?.name || domain || "解析记录"}</strong>
             <span>{records.length} 条记录</span>
           </div>
-          {activeDomain?.dnsStatus && <em>DNS {activeDomain.dnsStatus}</em>}
+          {activeDomain?.providerLabel && <em>{activeDomain.providerLabel}</em>}
         </div>
+
+        <datalist id="record-value-options">
+          {recordValueOptions.map((value) => (
+            <option key={value} value={value} />
+          ))}
+        </datalist>
 
         <div className="records-table">
           <table>
@@ -511,6 +614,7 @@ function App() {
                 <th>记录值</th>
                 <th>TTL</th>
                 <th>状态</th>
+                <th>备注</th>
                 <th>操作</th>
               </tr>
             </thead>
@@ -563,6 +667,7 @@ function App() {
                       <input
                         className="table-control value-control"
                         value={draft.value}
+                        list="record-value-options"
                         onChange={(event) =>
                           updateDraft(record.recordId, { value: event.currentTarget.value })
                         }
@@ -590,11 +695,22 @@ function App() {
                             status: event.currentTarget.value as RecordForm["status"],
                           })
                         }
-                        disabled={locked}
+                        disabled={locked || provider === "cloudflare"}
                       >
                         <option value="ENABLE">启用</option>
                         <option value="DISABLE">暂停</option>
                       </select>
+                    </td>
+                    <td>
+                      <input
+                        className="table-control remark-control"
+                        value={draft.remark}
+                        onChange={(event) =>
+                          updateDraft(record.recordId, { remark: event.currentTarget.value })
+                        }
+                        disabled={locked}
+                        spellCheck={false}
+                      />
                     </td>
                     <td>
                       <div className="row-actions">
@@ -647,11 +763,13 @@ function App() {
 
       {configOpen && (
         <div className="modal-backdrop" role="presentation">
-          <section className="modal" role="dialog" aria-modal="true" aria-label="腾讯云配置">
+          <section className="modal" role="dialog" aria-modal="true" aria-label="供应商配置">
             <div className="modal-header">
               <div>
-                <h2>腾讯云配置</h2>
-                <p>{secretKeySaved ? "已保存 Key" : "未保存 Key"}</p>
+                <h2>供应商配置</h2>
+                <p>
+                  {activeProvider.label} · {secretKeySaved ? "已保存凭证" : activeProvider.status}
+                </p>
               </div>
               <button className="icon-button" onClick={() => setConfigOpen(false)} aria-label="关闭">
                 <CloseIcon />
@@ -660,20 +778,33 @@ function App() {
 
             <div className="modal-form">
               <label>
-                SecretId
+                供应商
+                <select
+                  value={provider}
+                  onChange={(event) => changeProvider(event.currentTarget.value as ProviderKey)}
+                >
+                  {providerOptions.map((item) => (
+                    <option key={item.value} value={item.value}>
+                      {item.label} · {item.status}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                {activeProvider.secretIdLabel}
                 <input
                   value={secretId}
                   onChange={(event) => setSecretId(event.currentTarget.value)}
-                  placeholder="AKID..."
+                  placeholder={activeProvider.secretIdPlaceholder}
                   spellCheck={false}
                 />
               </label>
               <label>
-                SecretKey
+                {activeProvider.secretKeyLabel}
                 <input
                   value={secretKey}
                   onChange={(event) => setSecretKey(event.currentTarget.value)}
-                  placeholder={secretKeySaved ? "留空保留已保存 SecretKey" : "创建时展示一次的 SecretKey"}
+                  placeholder={secretKeySaved ? "留空保留已保存凭证" : activeProvider.secretKeyPlaceholder}
                   spellCheck={false}
                   type="password"
                 />
@@ -683,16 +814,16 @@ function App() {
                 <input
                   value={endpoint}
                   onChange={(event) => setEndpoint(event.currentTarget.value)}
-                  placeholder={defaultEndpoint}
+                  placeholder={activeProvider.endpoint}
                   spellCheck={false}
                 />
               </label>
               <label>
-                Region
+                {activeProvider.regionLabel}
                 <input
                   value={region}
                   onChange={(event) => setRegion(event.currentTarget.value)}
-                  placeholder="通常可留空"
+                  placeholder={activeProvider.regionPlaceholder}
                   spellCheck={false}
                 />
               </label>
@@ -758,7 +889,7 @@ function App() {
                   onChange={(event) =>
                     setRecordForm({ ...recordForm, recordLine: event.currentTarget.value })
                   }
-                  placeholder="默认"
+                  placeholder={provider === "cloudflare" ? "DNS only 或 Proxied" : "默认"}
                 />
               </label>
               <label>
@@ -791,6 +922,7 @@ function App() {
                       status: event.currentTarget.value as RecordForm["status"],
                     })
                   }
+                  disabled={provider === "cloudflare"}
                 >
                   <option value="ENABLE">启用</option>
                   <option value="DISABLE">暂停</option>
@@ -798,12 +930,24 @@ function App() {
               </label>
               <label className="span-2">
                 记录值
-                <textarea
+                <input
                   value={recordForm.value}
+                  list="record-value-options"
                   onChange={(event) =>
                     setRecordForm({ ...recordForm, value: event.currentTarget.value })
                   }
                   placeholder="IP、CNAME、TXT 内容或其它记录值"
+                  spellCheck={false}
+                />
+              </label>
+              <label className="span-2">
+                备注
+                <textarea
+                  value={recordForm.remark}
+                  onChange={(event) =>
+                    setRecordForm({ ...recordForm, remark: event.currentTarget.value })
+                  }
+                  placeholder="内部备注，不影响 DNS 解析"
                   spellCheck={false}
                 />
               </label>

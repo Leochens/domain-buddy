@@ -1,6 +1,7 @@
 use hmac::{Hmac, Mac};
+use reqwest::Method;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::{
     fs,
@@ -10,7 +11,12 @@ use std::{
 use tauri::Manager;
 use time::{format_description, OffsetDateTime};
 
-const DEFAULT_ENDPOINT: &str = "https://dnspod.tencentcloudapi.com";
+const PROVIDER_TENCENT: &str = "tencent";
+const PROVIDER_CLOUDFLARE: &str = "cloudflare";
+const PROVIDER_ALIYUN: &str = "aliyun";
+const DEFAULT_TENCENT_ENDPOINT: &str = "https://dnspod.tencentcloudapi.com";
+const DEFAULT_CLOUDFLARE_ENDPOINT: &str = "https://api.cloudflare.com/client/v4";
+const DEFAULT_ALIYUN_ENDPOINT: &str = "https://alidns.aliyuncs.com";
 const DEFAULT_RECORD_LINE: &str = "默认";
 const DEFAULT_STATUS: &str = "ENABLE";
 const DNSPOD_SERVICE: &str = "dnspod";
@@ -21,24 +27,33 @@ type HmacSha256 = Hmac<Sha256>;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CloudConfig {
+    #[serde(default = "default_provider")]
+    provider: String,
+    #[serde(default)]
     secret_id: String,
     secret_key: String,
     endpoint: String,
+    #[serde(default)]
     region: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SaveConfig {
+    #[serde(default = "default_provider")]
+    provider: String,
+    #[serde(default)]
     secret_id: String,
     secret_key: String,
     endpoint: String,
+    #[serde(default)]
     region: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PublicConfig {
+    provider: String,
     secret_id: String,
     secret_key_saved: bool,
     endpoint: String,
@@ -51,7 +66,7 @@ struct ActionResult {
     ok: bool,
     message: String,
     request_id: Option<String>,
-    record_id: Option<i64>,
+    record_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -67,7 +82,9 @@ struct VerifyResult {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DomainSummary {
-    domain_id: i64,
+    domain_id: String,
+    provider: String,
+    provider_label: String,
     name: String,
     status: String,
     dns_status: String,
@@ -80,7 +97,7 @@ struct DomainSummary {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DnsRecord {
-    record_id: i64,
+    record_id: String,
     name: String,
     record_type: String,
     line: String,
@@ -98,7 +115,7 @@ struct DnsRecord {
 #[serde(rename_all = "camelCase")]
 struct RecordInput {
     domain: String,
-    record_id: Option<i64>,
+    record_id: Option<String>,
     sub_domain: String,
     record_type: String,
     record_line: String,
@@ -106,6 +123,37 @@ struct RecordInput {
     ttl: Option<u64>,
     mx: Option<u64>,
     status: String,
+    #[serde(default)]
+    remark: String,
+}
+
+fn default_provider() -> String {
+    PROVIDER_TENCENT.to_string()
+}
+
+fn provider_key(provider: &str) -> String {
+    let key = provider.trim().to_ascii_lowercase();
+    if key.is_empty() {
+        PROVIDER_TENCENT.to_string()
+    } else {
+        key
+    }
+}
+
+fn provider_label(provider: &str) -> &'static str {
+    match provider_key(provider).as_str() {
+        PROVIDER_CLOUDFLARE => "Cloudflare",
+        PROVIDER_ALIYUN => "阿里云 DNS",
+        _ => "腾讯云 DNSPod",
+    }
+}
+
+fn default_endpoint_for_provider(provider: &str) -> &'static str {
+    match provider_key(provider).as_str() {
+        PROVIDER_CLOUDFLARE => DEFAULT_CLOUDFLARE_ENDPOINT,
+        PROVIDER_ALIYUN => DEFAULT_ALIYUN_ENDPOINT,
+        _ => DEFAULT_TENCENT_ENDPOINT,
+    }
 }
 
 fn config_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -117,14 +165,18 @@ fn config_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(dir.join("tencent-cloud.json"))
 }
 
-fn normalize_endpoint(endpoint: &str) -> String {
+fn normalize_endpoint(provider: &str, endpoint: &str) -> String {
     let trimmed = endpoint.trim().trim_end_matches('/');
-    if trimmed.is_empty() {
-        DEFAULT_ENDPOINT.to_string()
-    } else if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-        trimmed.to_string()
+    let base = if trimmed.is_empty() {
+        default_endpoint_for_provider(provider)
     } else {
-        format!("https://{trimmed}")
+        trimmed
+    };
+
+    if base.starts_with("http://") || base.starts_with("https://") {
+        base.to_string()
+    } else {
+        format!("https://{base}")
     }
 }
 
@@ -148,22 +200,49 @@ fn read_saved_config(app: &tauri::AppHandle) -> Result<Option<CloudConfig>, Stri
     }
 
     let content = fs::read_to_string(&path).map_err(|err| format!("无法读取配置文件：{err}"))?;
-    let config = serde_json::from_str::<CloudConfig>(&content)
+    let mut config = serde_json::from_str::<CloudConfig>(&content)
         .map_err(|err| format!("配置文件格式错误：{err}"))?;
+    config.provider = provider_key(&config.provider);
+    config.endpoint = normalize_endpoint(&config.provider, &config.endpoint);
     Ok(Some(config))
 }
 
 fn read_required_config(app: &tauri::AppHandle) -> Result<CloudConfig, String> {
-    let config = read_saved_config(app)?.ok_or_else(|| "请先保存腾讯云配置".to_string())?;
-    if config.secret_id.trim().is_empty() || config.secret_key.trim().is_empty() {
-        Err("SecretId 和 SecretKey 不能为空".to_string())
-    } else {
-        Ok(config)
+    let config = read_saved_config(app)?.ok_or_else(|| "请先保存供应商配置".to_string())?;
+    validate_config(&config)?;
+    Ok(config)
+}
+
+fn validate_config(config: &CloudConfig) -> Result<(), String> {
+    let provider = provider_key(&config.provider);
+    match provider.as_str() {
+        PROVIDER_CLOUDFLARE => {
+            if config.secret_key.trim().is_empty() {
+                Err("Cloudflare API Token 不能为空".to_string())
+            } else {
+                Ok(())
+            }
+        }
+        PROVIDER_ALIYUN => {
+            if config.secret_id.trim().is_empty() || config.secret_key.trim().is_empty() {
+                Err("阿里云 AccessKeyId 和 AccessKeySecret 不能为空".to_string())
+            } else {
+                Ok(())
+            }
+        }
+        _ => {
+            if config.secret_id.trim().is_empty() || config.secret_key.trim().is_empty() {
+                Err("腾讯云 SecretId 和 SecretKey 不能为空".to_string())
+            } else {
+                Ok(())
+            }
+        }
     }
 }
 
 fn to_public_config(config: CloudConfig) -> PublicConfig {
     PublicConfig {
+        provider: provider_key(&config.provider),
         secret_id: config.secret_id,
         secret_key_saved: !config.secret_key.trim().is_empty(),
         endpoint: config.endpoint,
@@ -230,7 +309,14 @@ async fn call_dnspod(
     payload: Value,
 ) -> Result<Value, String> {
     let config = read_required_config(app)?;
-    let endpoint = normalize_endpoint(&config.endpoint);
+    if provider_key(&config.provider) != PROVIDER_TENCENT {
+        return Err(format!(
+            "当前供应商不是 {}",
+            provider_label(PROVIDER_TENCENT)
+        ));
+    }
+
+    let endpoint = normalize_endpoint(&config.provider, &config.endpoint);
     let host = endpoint_host(&endpoint)?;
     let payload_text =
         serde_json::to_string(&payload).map_err(|err| format!("请求参数编码失败：{err}"))?;
@@ -285,20 +371,94 @@ async fn call_dnspod(
     Ok(response)
 }
 
-fn value_as_string(value: &Value, key: &str) -> String {
-    value
-        .get(key)
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string()
+async fn call_cloudflare_with_config(
+    config: &CloudConfig,
+    method: Method,
+    path: &str,
+    payload: Option<Value>,
+) -> Result<Value, String> {
+    let endpoint = normalize_endpoint(&config.provider, &config.endpoint);
+    let url = format!("{}{}", endpoint.trim_end_matches('/'), path);
+    let client = reqwest::Client::new();
+    let mut request = client
+        .request(method, url)
+        .bearer_auth(config.secret_key.trim())
+        .header("Content-Type", "application/json");
+
+    if let Some(payload) = payload {
+        request = request.json(&payload);
+    }
+
+    let response = request
+        .send()
+        .await
+        .map_err(|err| format!("请求 Cloudflare 失败：{err}"))?;
+    let status = response.status();
+    let text = response
+        .text()
+        .await
+        .map_err(|err| format!("读取 Cloudflare 响应失败：{err}"))?;
+
+    let value = serde_json::from_str::<Value>(&text)
+        .map_err(|err| format!("Cloudflare 响应不是合法 JSON：{err}; 原始响应：{text}"))?;
+    if !status.is_success() {
+        return Err(format!("Cloudflare 返回 HTTP {status}: {text}"));
+    }
+    if !value
+        .get("success")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        let message = value
+            .get("errors")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .map(|item| value_as_string(item, "message"))
+                    .filter(|item| !item.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            })
+            .filter(|item| !item.is_empty())
+            .unwrap_or_else(|| value.to_string());
+        return Err(format!("Cloudflare 请求失败：{message}"));
+    }
+
+    Ok(value)
 }
 
-fn value_as_i64(value: &Value, key: &str) -> i64 {
-    value.get(key).and_then(Value::as_i64).unwrap_or_default()
+async fn call_cloudflare(
+    app: &tauri::AppHandle,
+    method: Method,
+    path: &str,
+    payload: Option<Value>,
+) -> Result<Value, String> {
+    let config = read_required_config(app)?;
+    if provider_key(&config.provider) != PROVIDER_CLOUDFLARE {
+        return Err(format!(
+            "当前供应商不是 {}",
+            provider_label(PROVIDER_CLOUDFLARE)
+        ));
+    }
+    call_cloudflare_with_config(&config, method, path, payload).await
+}
+
+fn value_as_string(value: &Value, key: &str) -> String {
+    match value.get(key) {
+        Some(Value::String(item)) => item.to_string(),
+        Some(Value::Number(item)) => item.to_string(),
+        Some(Value::Bool(item)) => item.to_string(),
+        _ => String::new(),
+    }
 }
 
 fn value_as_u64(value: &Value, key: &str) -> u64 {
     value.get(key).and_then(Value::as_u64).unwrap_or_default()
+}
+
+fn value_as_id_string(value: &Value, key: &str) -> String {
+    value_as_string(value, key)
 }
 
 fn request_id(response: &Value) -> Option<String> {
@@ -308,8 +468,12 @@ fn request_id(response: &Value) -> Option<String> {
         .map(ToString::to_string)
 }
 
-fn response_record_id(response: &Value) -> Option<i64> {
-    response.get("RecordId").and_then(Value::as_i64)
+fn response_record_id(response: &Value) -> Option<String> {
+    response.get("RecordId").map(|value| match value {
+        Value::String(item) => item.to_string(),
+        Value::Number(item) => item.to_string(),
+        _ => String::new(),
+    })
 }
 
 fn domain_summaries(response: &Value) -> Vec<DomainSummary> {
@@ -320,7 +484,9 @@ fn domain_summaries(response: &Value) -> Vec<DomainSummary> {
             items
                 .iter()
                 .map(|item| DomainSummary {
-                    domain_id: value_as_i64(item, "DomainId"),
+                    domain_id: value_as_id_string(item, "DomainId"),
+                    provider: PROVIDER_TENCENT.to_string(),
+                    provider_label: provider_label(PROVIDER_TENCENT).to_string(),
                     name: value_as_string(item, "Name"),
                     status: value_as_string(item, "Status"),
                     dns_status: value_as_string(item, "DNSStatus"),
@@ -332,6 +498,88 @@ fn domain_summaries(response: &Value) -> Vec<DomainSummary> {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default()
+}
+
+fn cloudflare_domain_summaries(zones: &[Value]) -> Vec<DomainSummary> {
+    zones
+        .iter()
+        .map(|item| DomainSummary {
+            domain_id: value_as_id_string(item, "id"),
+            provider: PROVIDER_CLOUDFLARE.to_string(),
+            provider_label: provider_label(PROVIDER_CLOUDFLARE).to_string(),
+            name: value_as_string(item, "name"),
+            status: value_as_string(item, "status"),
+            dns_status: String::new(),
+            grade_title: item
+                .get("plan")
+                .map(|plan| value_as_string(plan, "name"))
+                .unwrap_or_default(),
+            record_count: 0,
+            remark: value_as_string(item, "type"),
+            updated_on: value_as_string(item, "modified_on"),
+        })
+        .collect()
+}
+
+async fn cloudflare_zones(config: &CloudConfig) -> Result<Vec<Value>, String> {
+    let mut zones = Vec::new();
+    let mut page = 1_u64;
+
+    loop {
+        let response = call_cloudflare_with_config(
+            config,
+            Method::GET,
+            &format!("/zones?per_page=100&page={page}"),
+            None,
+        )
+        .await?;
+        if let Some(items) = response.get("result").and_then(Value::as_array) {
+            zones.extend(items.iter().cloned());
+        }
+
+        let total_pages = response
+            .get("result_info")
+            .and_then(|value| value.get("total_pages"))
+            .and_then(Value::as_u64)
+            .unwrap_or(1);
+        if page >= total_pages || page >= 50 {
+            break;
+        }
+        page += 1;
+    }
+
+    Ok(zones)
+}
+
+async fn cloudflare_zone_id(config: &CloudConfig, domain: &str) -> Result<String, String> {
+    cloudflare_zones(config)
+        .await?
+        .into_iter()
+        .find(|item| value_as_string(item, "name").eq_ignore_ascii_case(domain))
+        .map(|item| value_as_id_string(&item, "id"))
+        .filter(|item| !item.is_empty())
+        .ok_or_else(|| format!("Cloudflare 账号下没有找到域名 {domain}"))
+}
+
+fn relative_record_name(name: &str, domain: &str) -> String {
+    if name.eq_ignore_ascii_case(domain) {
+        "@".to_string()
+    } else {
+        name.strip_suffix(&format!(".{domain}"))
+            .unwrap_or(name)
+            .to_string()
+    }
+}
+
+fn absolute_record_name(domain: &str, sub_domain: &str) -> String {
+    let sub_domain = sub_domain.trim();
+    if sub_domain.is_empty() || sub_domain == "@" {
+        domain.to_string()
+    } else if sub_domain.ends_with(domain) {
+        sub_domain.to_string()
+    } else {
+        format!("{sub_domain}.{domain}")
+    }
 }
 
 fn normalize_record_input(input: RecordInput) -> Result<RecordInput, String> {
@@ -374,7 +622,65 @@ fn normalize_record_input(input: RecordInput) -> Result<RecordInput, String> {
         ttl: Some(input.ttl.unwrap_or(600)),
         mx: Some(input.mx.unwrap_or(0)),
         status,
+        remark: input.remark.trim().to_string(),
     })
+}
+
+fn parse_dnspod_record_id(record_id: &str) -> Result<i64, String> {
+    record_id
+        .trim()
+        .parse::<i64>()
+        .map_err(|_| "RecordId 不正确".to_string())
+        .and_then(|id| {
+            if id <= 0 {
+                Err("RecordId 不正确".to_string())
+            } else {
+                Ok(id)
+            }
+        })
+}
+
+async fn modify_dnspod_record_remark(
+    app: &tauri::AppHandle,
+    domain: &str,
+    record_id: i64,
+    remark: &str,
+) -> Result<Option<String>, String> {
+    let response = call_dnspod(
+        app,
+        "ModifyRecordRemark",
+        json!({
+            "Domain": domain,
+            "RecordId": record_id,
+            "Remark": remark
+        }),
+    )
+    .await?;
+    Ok(request_id(&response))
+}
+
+fn cloudflare_record_payload(input: &RecordInput) -> Value {
+    let mut body = Map::new();
+    body.insert("type".to_string(), json!(input.record_type));
+    body.insert(
+        "name".to_string(),
+        json!(absolute_record_name(&input.domain, &input.sub_domain)),
+    );
+    body.insert("content".to_string(), json!(input.value));
+    body.insert("ttl".to_string(), json!(input.ttl.unwrap_or(600)));
+    body.insert("comment".to_string(), json!(input.remark));
+
+    if input.record_type == "MX" {
+        body.insert("priority".to_string(), json!(input.mx.unwrap_or(0)));
+    }
+
+    if matches!(input.record_type.as_str(), "A" | "AAAA" | "CNAME") {
+        let proxied = input.record_line.eq_ignore_ascii_case("proxied")
+            || input.record_line.eq_ignore_ascii_case("代理");
+        body.insert("proxied".to_string(), json!(proxied));
+    }
+
+    Value::Object(body)
 }
 
 #[tauri::command]
@@ -385,8 +691,14 @@ fn load_config(app: tauri::AppHandle) -> Result<Option<PublicConfig>, String> {
 #[tauri::command]
 fn save_config(app: tauri::AppHandle, config: SaveConfig) -> Result<PublicConfig, String> {
     let existing = read_saved_config(&app)?;
+    let provider = provider_key(&config.provider);
     let secret_id = config.secret_id.trim().to_string();
-    let secret_key = if config.secret_key.trim().is_empty() {
+    let secret_key = if config.secret_key.trim().is_empty()
+        && existing
+            .as_ref()
+            .map(|item| provider_key(&item.provider) == provider)
+            .unwrap_or(false)
+    {
         existing
             .as_ref()
             .map(|item| item.secret_key.clone())
@@ -395,20 +707,15 @@ fn save_config(app: tauri::AppHandle, config: SaveConfig) -> Result<PublicConfig
         config.secret_key.trim().to_string()
     };
 
-    if secret_id.is_empty() {
-        return Err("SecretId 不能为空".to_string());
-    }
-    if secret_key.is_empty() {
-        return Err("SecretKey 不能为空；如已保存，可留空保留原值".to_string());
-    }
-
     let stored = CloudConfig {
+        provider,
         secret_id,
         secret_key,
-        endpoint: normalize_endpoint(&config.endpoint),
+        endpoint: normalize_endpoint(&config.provider, &config.endpoint),
         region: config.region.trim().to_string(),
     };
     endpoint_host(&stored.endpoint)?;
+    validate_config(&stored)?;
 
     let path = config_path(&app)?;
     let content =
@@ -420,165 +727,316 @@ fn save_config(app: tauri::AppHandle, config: SaveConfig) -> Result<PublicConfig
 
 #[tauri::command]
 async fn verify_config(app: tauri::AppHandle) -> Result<VerifyResult, String> {
-    let response = call_dnspod(
-        &app,
-        "DescribeDomainList",
-        json!({
-            "Type": "ALL",
-            "Offset": 0,
-            "Limit": 3000
-        }),
-    )
-    .await?;
+    let config = read_required_config(&app)?;
+    match provider_key(&config.provider).as_str() {
+        PROVIDER_CLOUDFLARE => {
+            let zones = cloudflare_zones(&config).await?;
+            let domains = cloudflare_domain_summaries(&zones);
+            Ok(VerifyResult {
+                ok: true,
+                message: "Cloudflare 连接成功，API Token 可用".to_string(),
+                request_id: None,
+                domain_count: Some(domains.len() as u64),
+                domains,
+            })
+        }
+        PROVIDER_ALIYUN => Err("阿里云配置已保存，但 DNS API 接入还在预留中".to_string()),
+        _ => {
+            let response = call_dnspod(
+                &app,
+                "DescribeDomainList",
+                json!({
+                    "Type": "ALL",
+                    "Offset": 0,
+                    "Limit": 3000
+                }),
+            )
+            .await?;
 
-    let domain_count = response
-        .get("DomainCountInfo")
-        .and_then(|value| value.get("AllTotal"))
-        .and_then(Value::as_u64);
+            let domain_count = response
+                .get("DomainCountInfo")
+                .and_then(|value| value.get("AllTotal"))
+                .and_then(Value::as_u64);
 
-    Ok(VerifyResult {
-        ok: true,
-        message: "腾讯云 DNSPod 连接成功，凭证和权限可用".to_string(),
-        request_id: request_id(&response),
-        domain_count,
-        domains: domain_summaries(&response),
-    })
+            Ok(VerifyResult {
+                ok: true,
+                message: "腾讯云 DNSPod 连接成功，凭证和权限可用".to_string(),
+                request_id: request_id(&response),
+                domain_count,
+                domains: domain_summaries(&response),
+            })
+        }
+    }
 }
 
 #[tauri::command]
 async fn list_records(app: tauri::AppHandle, domain: String) -> Result<Vec<DnsRecord>, String> {
     let domain = domain.trim().to_string();
     if domain.is_empty() {
-        return Err("请先输入要管理的主域名".to_string());
+        return Err("请先选择要管理的主域名".to_string());
     }
 
-    let response = call_dnspod(
-        &app,
-        "DescribeRecordList",
-        json!({
-            "Domain": domain,
-            "Offset": 0,
-            "Limit": 3000,
-            "ErrorOnEmpty": "no"
-        }),
-    )
-    .await?;
-
-    let records = response
-        .get("RecordList")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .map(|item| DnsRecord {
-                    record_id: value_as_i64(item, "RecordId"),
-                    name: value_as_string(item, "Name"),
-                    record_type: value_as_string(item, "Type"),
-                    line: value_as_string(item, "Line"),
-                    line_id: value_as_string(item, "LineId"),
-                    value: value_as_string(item, "Value"),
-                    ttl: value_as_u64(item, "TTL"),
-                    mx: value_as_u64(item, "MX"),
-                    status: value_as_string(item, "Status"),
-                    updated_on: value_as_string(item, "UpdatedOn"),
-                    remark: value_as_string(item, "Remark"),
-                    default_ns: item
-                        .get("DefaultNS")
-                        .and_then(Value::as_bool)
-                        .unwrap_or_default(),
+    let config = read_required_config(&app)?;
+    match provider_key(&config.provider).as_str() {
+        PROVIDER_CLOUDFLARE => {
+            let zone_id = cloudflare_zone_id(&config, &domain).await?;
+            let response = call_cloudflare(
+                &app,
+                Method::GET,
+                &format!("/zones/{zone_id}/dns_records?per_page=5000"),
+                None,
+            )
+            .await?;
+            let records = response
+                .get("result")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .map(|item| {
+                            let proxied = item
+                                .get("proxied")
+                                .and_then(Value::as_bool)
+                                .unwrap_or_default();
+                            DnsRecord {
+                                record_id: value_as_id_string(item, "id"),
+                                name: relative_record_name(&value_as_string(item, "name"), &domain),
+                                record_type: value_as_string(item, "type"),
+                                line: if proxied { "Proxied" } else { "DNS only" }.to_string(),
+                                line_id: String::new(),
+                                value: value_as_string(item, "content"),
+                                ttl: value_as_u64(item, "ttl"),
+                                mx: value_as_u64(item, "priority"),
+                                status: DEFAULT_STATUS.to_string(),
+                                updated_on: value_as_string(item, "modified_on"),
+                                remark: value_as_string(item, "comment"),
+                                default_ns: false,
+                            }
+                        })
+                        .collect::<Vec<_>>()
                 })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+                .unwrap_or_default();
+            Ok(records)
+        }
+        PROVIDER_ALIYUN => Err("阿里云 DNS 记录管理还在预留中".to_string()),
+        _ => {
+            let response = call_dnspod(
+                &app,
+                "DescribeRecordList",
+                json!({
+                    "Domain": domain,
+                    "Offset": 0,
+                    "Limit": 3000,
+                    "ErrorOnEmpty": "no"
+                }),
+            )
+            .await?;
 
-    Ok(records)
+            let records = response
+                .get("RecordList")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .map(|item| DnsRecord {
+                            record_id: value_as_id_string(item, "RecordId"),
+                            name: value_as_string(item, "Name"),
+                            record_type: value_as_string(item, "Type"),
+                            line: value_as_string(item, "Line"),
+                            line_id: value_as_string(item, "LineId"),
+                            value: value_as_string(item, "Value"),
+                            ttl: value_as_u64(item, "TTL"),
+                            mx: value_as_u64(item, "MX"),
+                            status: value_as_string(item, "Status"),
+                            updated_on: value_as_string(item, "UpdatedOn"),
+                            remark: value_as_string(item, "Remark"),
+                            default_ns: item
+                                .get("DefaultNS")
+                                .and_then(Value::as_bool)
+                                .unwrap_or_default(),
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+
+            Ok(records)
+        }
+    }
 }
 
 #[tauri::command]
 async fn create_record(app: tauri::AppHandle, input: RecordInput) -> Result<ActionResult, String> {
     let input = normalize_record_input(input)?;
-    let response = call_dnspod(
-        &app,
-        "CreateRecord",
-        json!({
-            "Domain": input.domain,
-            "SubDomain": input.sub_domain,
-            "RecordType": input.record_type,
-            "RecordLine": input.record_line,
-            "Value": input.value,
-            "TTL": input.ttl.unwrap_or(600),
-            "MX": input.mx.unwrap_or(0),
-            "Status": input.status
-        }),
-    )
-    .await?;
+    let config = read_required_config(&app)?;
+    match provider_key(&config.provider).as_str() {
+        PROVIDER_CLOUDFLARE => {
+            let zone_id = cloudflare_zone_id(&config, &input.domain).await?;
+            let response = call_cloudflare(
+                &app,
+                Method::POST,
+                &format!("/zones/{zone_id}/dns_records"),
+                Some(cloudflare_record_payload(&input)),
+            )
+            .await?;
+            let record_id = response
+                .get("result")
+                .map(|item| value_as_id_string(item, "id"))
+                .filter(|item| !item.is_empty());
+            Ok(ActionResult {
+                ok: true,
+                message: "解析记录已新增".to_string(),
+                request_id: None,
+                record_id,
+            })
+        }
+        PROVIDER_ALIYUN => Err("阿里云 DNS 记录管理还在预留中".to_string()),
+        _ => {
+            let domain = input.domain.clone();
+            let response = call_dnspod(
+                &app,
+                "CreateRecord",
+                json!({
+                    "Domain": domain,
+                    "SubDomain": input.sub_domain,
+                    "RecordType": input.record_type,
+                    "RecordLine": input.record_line,
+                    "Value": input.value,
+                    "TTL": input.ttl.unwrap_or(600),
+                    "MX": input.mx.unwrap_or(0),
+                    "Status": input.status
+                }),
+            )
+            .await?;
+            let record_id = response_record_id(&response);
 
-    Ok(ActionResult {
-        ok: true,
-        message: "解析记录已新增".to_string(),
-        request_id: request_id(&response),
-        record_id: response_record_id(&response),
-    })
+            if let Some(record_id_text) = record_id.as_ref() {
+                let record_id_number = parse_dnspod_record_id(record_id_text)?;
+                if !input.remark.is_empty() {
+                    modify_dnspod_record_remark(&app, &domain, record_id_number, &input.remark)
+                        .await?;
+                }
+            }
+
+            Ok(ActionResult {
+                ok: true,
+                message: "解析记录已新增".to_string(),
+                request_id: request_id(&response),
+                record_id,
+            })
+        }
+    }
 }
 
 #[tauri::command]
 async fn update_record(app: tauri::AppHandle, input: RecordInput) -> Result<ActionResult, String> {
     let input = normalize_record_input(input)?;
-    let record_id = input.record_id.ok_or_else(|| "缺少 RecordId".to_string())?;
-    let response = call_dnspod(
-        &app,
-        "ModifyRecord",
-        json!({
-            "Domain": input.domain,
-            "RecordId": record_id,
-            "SubDomain": input.sub_domain,
-            "RecordType": input.record_type,
-            "RecordLine": input.record_line,
-            "Value": input.value,
-            "TTL": input.ttl.unwrap_or(600),
-            "MX": input.mx.unwrap_or(0),
-            "Status": input.status
-        }),
-    )
-    .await?;
+    let record_id = input
+        .record_id
+        .clone()
+        .ok_or_else(|| "缺少 RecordId".to_string())?;
+    let config = read_required_config(&app)?;
 
-    Ok(ActionResult {
-        ok: true,
-        message: "解析记录已修改".to_string(),
-        request_id: request_id(&response),
-        record_id: response_record_id(&response).or(Some(record_id)),
-    })
+    match provider_key(&config.provider).as_str() {
+        PROVIDER_CLOUDFLARE => {
+            let zone_id = cloudflare_zone_id(&config, &input.domain).await?;
+            call_cloudflare(
+                &app,
+                Method::PUT,
+                &format!("/zones/{zone_id}/dns_records/{record_id}"),
+                Some(cloudflare_record_payload(&input)),
+            )
+            .await?;
+            Ok(ActionResult {
+                ok: true,
+                message: "解析记录已修改".to_string(),
+                request_id: None,
+                record_id: Some(record_id),
+            })
+        }
+        PROVIDER_ALIYUN => Err("阿里云 DNS 记录管理还在预留中".to_string()),
+        _ => {
+            let record_id_number = parse_dnspod_record_id(&record_id)?;
+            let domain = input.domain.clone();
+            let response = call_dnspod(
+                &app,
+                "ModifyRecord",
+                json!({
+                    "Domain": domain,
+                    "RecordId": record_id_number,
+                    "SubDomain": input.sub_domain,
+                    "RecordType": input.record_type,
+                    "RecordLine": input.record_line,
+                    "Value": input.value,
+                    "TTL": input.ttl.unwrap_or(600),
+                    "MX": input.mx.unwrap_or(0),
+                    "Status": input.status
+                }),
+            )
+            .await?;
+            modify_dnspod_record_remark(&app, &domain, record_id_number, &input.remark).await?;
+
+            Ok(ActionResult {
+                ok: true,
+                message: "解析记录已修改".to_string(),
+                request_id: request_id(&response),
+                record_id: response_record_id(&response).or(Some(record_id)),
+            })
+        }
+    }
 }
 
 #[tauri::command]
 async fn delete_record(
     app: tauri::AppHandle,
     domain: String,
-    record_id: i64,
+    record_id: String,
 ) -> Result<ActionResult, String> {
     if domain.trim().is_empty() {
         return Err("域名不能为空".to_string());
     }
-    if record_id <= 0 {
+    if record_id.trim().is_empty() {
         return Err("RecordId 不正确".to_string());
     }
 
-    let response = call_dnspod(
-        &app,
-        "DeleteRecord",
-        json!({
-            "Domain": domain.trim(),
-            "RecordId": record_id
-        }),
-    )
-    .await?;
+    let config = read_required_config(&app)?;
+    match provider_key(&config.provider).as_str() {
+        PROVIDER_CLOUDFLARE => {
+            let zone_id = cloudflare_zone_id(&config, domain.trim()).await?;
+            call_cloudflare(
+                &app,
+                Method::DELETE,
+                &format!("/zones/{zone_id}/dns_records/{}", record_id.trim()),
+                None,
+            )
+            .await?;
+            Ok(ActionResult {
+                ok: true,
+                message: "解析记录已删除".to_string(),
+                request_id: None,
+                record_id: Some(record_id),
+            })
+        }
+        PROVIDER_ALIYUN => Err("阿里云 DNS 记录管理还在预留中".to_string()),
+        _ => {
+            let record_id_number = parse_dnspod_record_id(&record_id)?;
+            let response = call_dnspod(
+                &app,
+                "DeleteRecord",
+                json!({
+                    "Domain": domain.trim(),
+                    "RecordId": record_id_number
+                }),
+            )
+            .await?;
 
-    Ok(ActionResult {
-        ok: true,
-        message: "解析记录已删除".to_string(),
-        request_id: request_id(&response),
-        record_id: Some(record_id),
-    })
+            Ok(ActionResult {
+                ok: true,
+                message: "解析记录已删除".to_string(),
+                request_id: request_id(&response),
+                record_id: Some(record_id),
+            })
+        }
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
