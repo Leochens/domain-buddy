@@ -132,6 +132,10 @@ function providerMeta(provider: ProviderKey) {
   return providerOptions.find((item) => item.value === provider) || providerOptions[0];
 }
 
+function domainKey(domain: DomainSummary) {
+  return `${domain.provider}:${domain.domainId || domain.name}`;
+}
+
 function toMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
@@ -256,13 +260,14 @@ function CloseIcon() {
 }
 
 function App() {
-  const [provider, setProvider] = useState<ProviderKey>("tencent");
+  const [configs, setConfigs] = useState<PublicConfig[]>([]);
+  const [configProvider, setConfigProvider] = useState<ProviderKey>("tencent");
   const [secretId, setSecretId] = useState("");
   const [secretKey, setSecretKey] = useState("");
   const [secretKeySaved, setSecretKeySaved] = useState(false);
   const [endpoint, setEndpoint] = useState(providerMeta("tencent").endpoint);
   const [region, setRegion] = useState("");
-  const [domain, setDomain] = useState("");
+  const [activeDomainKey, setActiveDomainKey] = useState("");
   const [domains, setDomains] = useState<DomainSummary[]>([]);
   const [records, setRecords] = useState<DnsRecord[]>([]);
   const [recordDrafts, setRecordDrafts] = useState<Record<string, RecordForm>>({});
@@ -274,11 +279,12 @@ function App() {
   const [addOpen, setAddOpen] = useState(false);
   const desktopReady = useMemo(() => isTauriRuntime(), []);
 
-  const activeProvider = providerMeta(provider);
   const activeDomain = useMemo(
-    () => domains.find((item) => item.name === domain),
-    [domain, domains],
+    () => domains.find((item) => domainKey(item) === activeDomainKey),
+    [activeDomainKey, domains],
   );
+  const configFormProvider = providerMeta(configProvider);
+  const activeProviderLabel = activeDomain?.providerLabel || `${configs.length} 个供应商`;
   const recordValueOptions = useMemo(
     () => Array.from(new Set(records.map((record) => record.value).filter(Boolean))).sort(),
     [records],
@@ -290,84 +296,76 @@ function App() {
       return;
     }
 
-    invokeCommand<PublicConfig | null>("load_config")
-      .then((config) => {
-        if (!config) {
+    invokeCommand<PublicConfig[]>("load_configs")
+      .then((nextConfigs) => {
+        setConfigs(nextConfigs);
+        if (nextConfigs.length) {
+          applyConfigToForm(nextConfigs[0].provider, nextConfigs);
+          setNotice(`已加载 ${nextConfigs.length} 个供应商配置`);
+        } else {
           setConfigOpen(true);
-          return;
         }
-        const nextProvider = config.provider || "tencent";
-        setProvider(nextProvider);
-        setSecretId(config.secretId);
-        setSecretKeySaved(config.secretKeySaved);
-        setEndpoint(config.endpoint || providerMeta(nextProvider).endpoint);
-        setRegion(config.region || "");
-        setNotice(config.secretKeySaved ? `${providerMeta(nextProvider).shortLabel} 配置已加载` : "未保存凭证");
       })
       .catch((error) => setNotice(toMessage(error)));
   }, [desktopReady]);
 
-  function resetProviderData() {
-    setVerifyResult(null);
-    setDomains([]);
-    setDomain("");
-    setRecords([]);
-    setRecordDrafts({});
+  function configForProvider(provider: ProviderKey, source = configs) {
+    return source.find((item) => item.provider === provider);
   }
 
-  function changeProvider(nextProvider: ProviderKey) {
-    setProvider(nextProvider);
-    setEndpoint(providerMeta(nextProvider).endpoint);
-    setSecretId("");
+  function applyConfigToForm(provider: ProviderKey, source = configs) {
+    const existing = configForProvider(provider, source);
+    const meta = providerMeta(provider);
+    setConfigProvider(provider);
+    setSecretId(existing?.secretId || "");
     setSecretKey("");
-    setSecretKeySaved(false);
-    resetProviderData();
-    setNotice(`${providerMeta(nextProvider).shortLabel} 未验证`);
+    setSecretKeySaved(Boolean(existing?.secretKeySaved));
+    setEndpoint(existing?.endpoint || meta.endpoint);
+    setRegion(existing?.region || "");
+  }
+
+  function mergeProviderDomains(provider: ProviderKey, nextDomains: DomainSummary[]) {
+    setDomains((current) => [
+      ...current.filter((item) => item.provider !== provider),
+      ...nextDomains,
+    ]);
   }
 
   async function persistConfig() {
     const config = await invokeCommand<PublicConfig>("save_config", {
       config: {
-        provider,
+        provider: configProvider,
         secretId,
         secretKey,
         endpoint,
         region,
       },
     });
-    const nextProvider = config.provider || provider;
-    setProvider(nextProvider);
-    setSecretKey("");
-    setSecretKeySaved(config.secretKeySaved);
-    setEndpoint(config.endpoint || providerMeta(nextProvider).endpoint);
-    setRegion(config.region);
+    setConfigs((current) => [
+      ...current.filter((item) => item.provider !== config.provider),
+      config,
+    ]);
+    applyConfigToForm(config.provider, [
+      ...configs.filter((item) => item.provider !== config.provider),
+      config,
+    ]);
     return config;
   }
 
-  async function requestVerify() {
-    const result = await invokeCommand<VerifyResult>("verify_config");
-    setVerifyResult(result);
-    setDomains(result.domains || []);
-    setNotice(`已同步 ${result.domains?.length || 0} 个域名`);
-    return result;
-  }
-
-  async function saveConfig(verifyAfter = false) {
-    setBusy(verifyAfter ? "save-verify" : "save");
-    setVerifyResult(null);
+  async function verifyCurrentProvider() {
+    setBusy("verify");
     try {
-      await persistConfig();
-      if (verifyAfter) {
-        const result = await requestVerify();
-        const firstDomain = result.domains?.[0]?.name;
-        if (!domain.trim() && firstDomain) {
-          await loadRecords(firstDomain);
-        }
-        setConfigOpen(false);
-      } else {
-        resetProviderData();
-        setNotice("配置已保存");
+      const result = await invokeCommand<VerifyResult>("verify_config", {
+        provider: configProvider,
+      });
+      setVerifyResult(result);
+      mergeProviderDomains(configProvider, result.domains || []);
+      const firstDomain = result.domains?.[0];
+      if (!activeDomain && firstDomain) {
+        await loadRecords(firstDomain);
       }
+      setNotice(`${providerMeta(configProvider).shortLabel} 已同步 ${result.domains?.length || 0} 个域名`);
+      setConfigOpen(false);
     } catch (error) {
       setNotice(toMessage(error));
     } finally {
@@ -375,18 +373,41 @@ function App() {
     }
   }
 
-  async function verifyConfig() {
-    setBusy("verify");
+  async function syncAllProviders() {
+    setBusy("sync-all");
     try {
-      const result = await requestVerify();
-      const nextDomain = domain.trim() || result.domains?.[0]?.name;
+      const result = await invokeCommand<VerifyResult>("verify_all_configs");
+      setVerifyResult(result);
+      setDomains(result.domains || []);
+      const activeStillExists = result.domains?.some((item) => domainKey(item) === activeDomainKey);
+      const nextDomain = activeStillExists
+        ? result.domains.find((item) => domainKey(item) === activeDomainKey)
+        : result.domains?.[0];
       if (nextDomain) {
         await loadRecords(nextDomain);
+      } else {
+        setActiveDomainKey("");
+        setRecords([]);
+        setRecordDrafts({});
       }
-      setConfigOpen(false);
+      setNotice(result.message);
     } catch (error) {
-      setVerifyResult(null);
-      setDomains([]);
+      setNotice(toMessage(error));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function saveConfig(syncAfter = false) {
+    setBusy(syncAfter ? "save-sync" : "save");
+    try {
+      await persistConfig();
+      setNotice(`${providerMeta(configProvider).shortLabel} 配置已保存`);
+      if (syncAfter) {
+        await syncAllProviders();
+        setConfigOpen(false);
+      }
+    } catch (error) {
       setNotice(toMessage(error));
     } finally {
       setBusy(null);
@@ -394,20 +415,19 @@ function App() {
   }
 
   async function refreshCurrent() {
-    if (domain.trim()) {
-      await loadRecords(domain);
+    if (activeDomain) {
+      await loadRecords(activeDomain);
       return;
     }
-    if (secretKeySaved) {
-      await verifyConfig();
+    if (configs.length) {
+      await syncAllProviders();
       return;
     }
     setConfigOpen(true);
   }
 
-  async function loadRecords(nextDomain = domain) {
-    const cleanDomain = nextDomain.trim();
-    if (!cleanDomain) {
+  async function loadRecords(target = activeDomain) {
+    if (!target) {
       setNotice("未选择域名");
       return;
     }
@@ -415,13 +435,14 @@ function App() {
     setBusy("list");
     try {
       const nextRecords = await invokeCommand<DnsRecord[]>("list_records", {
-        domain: cleanDomain,
+        provider: target.provider,
+        domain: target.name,
       });
-      setDomain(cleanDomain);
+      setActiveDomainKey(domainKey(target));
       setRecords(nextRecords);
       setRecordDrafts(draftsFromRecords(nextRecords));
       setRecordForm(emptyRecordForm);
-      setNotice(`${cleanDomain}：${nextRecords.length} 条记录`);
+      setNotice(`${target.providerLabel} · ${target.name}：${nextRecords.length} 条记录`);
     } catch (error) {
       setNotice(toMessage(error));
     } finally {
@@ -447,8 +468,12 @@ function App() {
   }
 
   function recordPayload(form: RecordForm, recordId?: string) {
+    if (!activeDomain) {
+      throw new Error("未选择域名");
+    }
     return {
-      domain: domain.trim(),
+      provider: activeDomain.provider,
+      domain: activeDomain.name,
       recordId,
       subDomain: form.subDomain.trim(),
       recordType: form.recordType.trim(),
@@ -462,6 +487,7 @@ function App() {
   }
 
   async function saveInlineRecord(record: DnsRecord) {
+    if (!activeDomain) return;
     const draft = recordDrafts[record.recordId];
     if (!draft || !hasRecordChanges(record, draft)) return;
 
@@ -470,8 +496,8 @@ function App() {
       await invokeCommand("update_record", {
         input: recordPayload(draft, record.recordId),
       });
-      await loadRecords(domain);
-      setNotice(`${recordTitle(record, domain)} 已保存`);
+      await loadRecords(activeDomain);
+      setNotice(`${recordTitle(record, activeDomain.name)} 已保存`);
     } catch (error) {
       setNotice(toMessage(error));
     } finally {
@@ -480,7 +506,7 @@ function App() {
   }
 
   async function createRecord() {
-    if (!domain.trim()) {
+    if (!activeDomain) {
       setNotice("未选择域名");
       return;
     }
@@ -492,7 +518,7 @@ function App() {
       });
       setAddOpen(false);
       setRecordForm(emptyRecordForm);
-      await loadRecords(domain);
+      await loadRecords(activeDomain);
       setNotice("解析记录已新增");
     } catch (error) {
       setNotice(toMessage(error));
@@ -502,17 +528,19 @@ function App() {
   }
 
   async function removeRecord(record: DnsRecord) {
-    const fullName = recordTitle(record, domain);
+    if (!activeDomain) return;
+    const fullName = recordTitle(record, activeDomain.name);
     const confirmed = window.confirm(`确认删除 ${fullName} 这条解析记录吗？`);
     if (!confirmed) return;
 
     setBusy(`delete-${record.recordId}`);
     try {
       await invokeCommand("delete_record", {
-        domain: domain.trim(),
+        provider: activeDomain.provider,
+        domain: activeDomain.name,
         recordId: record.recordId,
       });
-      await loadRecords(domain);
+      await loadRecords(activeDomain);
       setNotice(`${fullName} 已删除`);
     } catch (error) {
       setNotice(toMessage(error));
@@ -529,8 +557,8 @@ function App() {
           <div>
             <h1>Domain Buddy</h1>
             <p>
-              {activeProvider.shortLabel}
-              {domain ? ` · ${domain}` : " · 未选择域名"}
+              {activeProviderLabel}
+              {activeDomain ? ` · ${activeDomain.name}` : " · 未选择域名"}
             </p>
           </div>
         </div>
@@ -543,10 +571,17 @@ function App() {
             className="icon-button"
             onClick={refreshCurrent}
             disabled={busy !== null || !desktopReady}
-            title={domain ? "刷新解析记录" : "同步域名"}
-            aria-label={domain ? "刷新解析记录" : "同步域名"}
+            title={activeDomain ? "刷新解析记录" : "同步全部供应商"}
+            aria-label={activeDomain ? "刷新解析记录" : "同步全部供应商"}
           >
             <RefreshIcon />
+          </button>
+          <button
+            className="secondary-button"
+            onClick={syncAllProviders}
+            disabled={!configs.length || busy !== null || !desktopReady}
+          >
+            同步全部
           </button>
           <button
             className="primary-button"
@@ -554,7 +589,7 @@ function App() {
               setRecordForm(emptyRecordForm);
               setAddOpen(true);
             }}
-            disabled={!domain || busy !== null || !desktopReady}
+            disabled={!activeDomain || busy !== null || !desktopReady}
           >
             <PlusIcon />
             添加
@@ -569,9 +604,9 @@ function App() {
       <section className="domain-strip">
         {domains.map((item) => (
           <button
-            className={item.name === domain ? "domain-chip active" : "domain-chip"}
-            key={`${item.provider}-${item.domainId || item.name}`}
-            onClick={() => loadRecords(item.name)}
+            className={domainKey(item) === activeDomainKey ? "domain-chip active" : "domain-chip"}
+            key={domainKey(item)}
+            onClick={() => loadRecords(item)}
             disabled={busy !== null || !desktopReady}
             title={item.remark || item.name}
           >
@@ -582,9 +617,9 @@ function App() {
         ))}
         {!domains.length && (
           <button className="domain-chip empty" onClick={() => setConfigOpen(true)}>
-            <span className="provider-badge">{activeProvider.shortLabel}</span>
-            <strong>{secretKeySaved ? "同步域名" : `配置 ${activeProvider.shortLabel}`}</strong>
-            <span>{desktopReady ? activeProvider.status : "Preview"}</span>
+            <span className="provider-badge">{configs.length ? "All" : "Setup"}</span>
+            <strong>{configs.length ? "同步全部供应商" : "添加供应商配置"}</strong>
+            <span>{desktopReady ? `${configs.length} 个配置` : "Preview"}</span>
           </button>
         )}
       </section>
@@ -592,7 +627,7 @@ function App() {
       <section className="records-panel">
         <div className="table-header">
           <div>
-            <strong>{activeDomain?.name || domain || "解析记录"}</strong>
+            <strong>{activeDomain?.name || "解析记录"}</strong>
             <span>{records.length} 条记录</span>
           </div>
           {activeDomain?.providerLabel && <em>{activeDomain.providerLabel}</em>}
@@ -695,7 +730,7 @@ function App() {
                             status: event.currentTarget.value as RecordForm["status"],
                           })
                         }
-                        disabled={locked || provider === "cloudflare"}
+                        disabled={locked || activeDomain?.provider === "cloudflare"}
                       >
                         <option value="ENABLE">启用</option>
                         <option value="DISABLE">暂停</option>
@@ -751,10 +786,10 @@ function App() {
 
           {!records.length && (
             <div className="empty-state">
-              <strong>{domain ? "暂无解析记录" : "未选择域名"}</strong>
+              <strong>{activeDomain ? "暂无解析记录" : "未选择域名"}</strong>
               <button className="primary-button" onClick={() => setConfigOpen(true)}>
                 <SettingsIcon />
-                {secretKeySaved ? "同步域名" : "配置"}
+                {configs.length ? "同步域名" : "配置"}
               </button>
             </div>
           )}
@@ -768,7 +803,7 @@ function App() {
               <div>
                 <h2>供应商配置</h2>
                 <p>
-                  {activeProvider.label} · {secretKeySaved ? "已保存凭证" : activeProvider.status}
+                  {configFormProvider.label} · {secretKeySaved ? "已保存凭证" : configFormProvider.status}
                 </p>
               </div>
               <button className="icon-button" onClick={() => setConfigOpen(false)} aria-label="关闭">
@@ -776,35 +811,38 @@ function App() {
               </button>
             </div>
 
+            <div className="provider-tabs">
+              {providerOptions.map((item) => {
+                const saved = Boolean(configForProvider(item.value));
+                return (
+                  <button
+                    key={item.value}
+                    className={configProvider === item.value ? "provider-tab active" : "provider-tab"}
+                    onClick={() => applyConfigToForm(item.value)}
+                  >
+                    <strong>{item.shortLabel}</strong>
+                    <span>{saved ? "已保存" : item.status}</span>
+                  </button>
+                );
+              })}
+            </div>
+
             <div className="modal-form">
               <label>
-                供应商
-                <select
-                  value={provider}
-                  onChange={(event) => changeProvider(event.currentTarget.value as ProviderKey)}
-                >
-                  {providerOptions.map((item) => (
-                    <option key={item.value} value={item.value}>
-                      {item.label} · {item.status}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                {activeProvider.secretIdLabel}
+                {configFormProvider.secretIdLabel}
                 <input
                   value={secretId}
                   onChange={(event) => setSecretId(event.currentTarget.value)}
-                  placeholder={activeProvider.secretIdPlaceholder}
+                  placeholder={configFormProvider.secretIdPlaceholder}
                   spellCheck={false}
                 />
               </label>
               <label>
-                {activeProvider.secretKeyLabel}
+                {configFormProvider.secretKeyLabel}
                 <input
                   value={secretKey}
                   onChange={(event) => setSecretKey(event.currentTarget.value)}
-                  placeholder={secretKeySaved ? "留空保留已保存凭证" : activeProvider.secretKeyPlaceholder}
+                  placeholder={secretKeySaved ? "留空保留已保存凭证" : configFormProvider.secretKeyPlaceholder}
                   spellCheck={false}
                   type="password"
                 />
@@ -814,16 +852,16 @@ function App() {
                 <input
                   value={endpoint}
                   onChange={(event) => setEndpoint(event.currentTarget.value)}
-                  placeholder={activeProvider.endpoint}
+                  placeholder={configFormProvider.endpoint}
                   spellCheck={false}
                 />
               </label>
               <label>
-                {activeProvider.regionLabel}
+                {configFormProvider.regionLabel}
                 <input
                   value={region}
                   onChange={(event) => setRegion(event.currentTarget.value)}
-                  placeholder={activeProvider.regionPlaceholder}
+                  placeholder={configFormProvider.regionPlaceholder}
                   spellCheck={false}
                 />
               </label>
@@ -831,26 +869,28 @@ function App() {
 
             <div className="modal-footer">
               <button className="secondary-button" onClick={() => saveConfig(false)} disabled={busy !== null || !desktopReady}>
-                {busy === "save" ? "保存中" : "只保存"}
+                {busy === "save" ? "保存中" : "保存此供应商"}
               </button>
-              <button className="secondary-button" onClick={verifyConfig} disabled={busy !== null || !desktopReady || !secretKeySaved}>
-                {busy === "verify" ? "验证中" : "验证连接"}
+              <button className="secondary-button" onClick={verifyCurrentProvider} disabled={busy !== null || !desktopReady || !secretKeySaved}>
+                {busy === "verify" ? "验证中" : "验证此供应商"}
               </button>
               <button className="primary-button" onClick={() => saveConfig(true)} disabled={busy !== null || !desktopReady}>
-                {busy === "save-verify" ? "处理中" : "保存并验证"}
+                {busy === "save-sync" || busy === "sync-all" ? "同步中" : "保存并同步全部"}
               </button>
             </div>
           </section>
         </div>
       )}
 
-      {addOpen && (
+      {addOpen && activeDomain && (
         <div className="modal-backdrop" role="presentation">
           <section className="modal compact-modal" role="dialog" aria-modal="true" aria-label="添加记录">
             <div className="modal-header">
               <div>
                 <h2>添加记录</h2>
-                <p>{domain}</p>
+                <p>
+                  {activeDomain.providerLabel} · {activeDomain.name}
+                </p>
               </div>
               <button className="icon-button" onClick={() => setAddOpen(false)} aria-label="关闭">
                 <CloseIcon />
@@ -889,7 +929,7 @@ function App() {
                   onChange={(event) =>
                     setRecordForm({ ...recordForm, recordLine: event.currentTarget.value })
                   }
-                  placeholder={provider === "cloudflare" ? "DNS only 或 Proxied" : "默认"}
+                  placeholder={activeDomain.provider === "cloudflare" ? "DNS only 或 Proxied" : "默认"}
                 />
               </label>
               <label>
@@ -922,7 +962,7 @@ function App() {
                       status: event.currentTarget.value as RecordForm["status"],
                     })
                   }
-                  disabled={provider === "cloudflare"}
+                  disabled={activeDomain.provider === "cloudflare"}
                 >
                   <option value="ENABLE">启用</option>
                   <option value="DISABLE">暂停</option>

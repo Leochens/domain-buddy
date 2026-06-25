@@ -26,6 +26,12 @@ type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct ConfigStore {
+    configs: Vec<CloudConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct CloudConfig {
     #[serde(default = "default_provider")]
     provider: String,
@@ -114,6 +120,7 @@ struct DnsRecord {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RecordInput {
+    provider: String,
     domain: String,
     record_id: Option<String>,
     sub_domain: String,
@@ -193,22 +200,61 @@ fn endpoint_host(endpoint: &str) -> Result<String, String> {
     }
 }
 
-fn read_saved_config(app: &tauri::AppHandle) -> Result<Option<CloudConfig>, String> {
+fn normalize_config(mut config: CloudConfig) -> CloudConfig {
+    config.provider = provider_key(&config.provider);
+    config.endpoint = normalize_endpoint(&config.provider, &config.endpoint);
+    config.region = config.region.trim().to_string();
+    config.secret_id = config.secret_id.trim().to_string();
+    config.secret_key = config.secret_key.trim().to_string();
+    config
+}
+
+fn read_saved_configs(app: &tauri::AppHandle) -> Result<Vec<CloudConfig>, String> {
     let path = config_path(app)?;
     if !path.exists() {
-        return Ok(None);
+        return Ok(Vec::new());
     }
 
     let content = fs::read_to_string(&path).map_err(|err| format!("无法读取配置文件：{err}"))?;
-    let mut config = serde_json::from_str::<CloudConfig>(&content)
+    let value = serde_json::from_str::<Value>(&content)
         .map_err(|err| format!("配置文件格式错误：{err}"))?;
-    config.provider = provider_key(&config.provider);
-    config.endpoint = normalize_endpoint(&config.provider, &config.endpoint);
-    Ok(Some(config))
+
+    if value.get("configs").is_some() {
+        let store = serde_json::from_value::<ConfigStore>(value)
+            .map_err(|err| format!("配置文件格式错误：{err}"))?;
+        Ok(store.configs.into_iter().map(normalize_config).collect())
+    } else {
+        let config = serde_json::from_str::<CloudConfig>(&content)
+            .map_err(|err| format!("配置文件格式错误：{err}"))?;
+        Ok(vec![normalize_config(config)])
+    }
 }
 
-fn read_required_config(app: &tauri::AppHandle) -> Result<CloudConfig, String> {
-    let config = read_saved_config(app)?.ok_or_else(|| "请先保存供应商配置".to_string())?;
+fn write_saved_configs(app: &tauri::AppHandle, configs: Vec<CloudConfig>) -> Result<(), String> {
+    let mut deduped = Vec::<CloudConfig>::new();
+    for config in configs.into_iter().map(normalize_config) {
+        if let Some(existing) = deduped
+            .iter_mut()
+            .find(|item| provider_key(&item.provider) == provider_key(&config.provider))
+        {
+            *existing = config;
+        } else {
+            deduped.push(config);
+        }
+    }
+
+    let path = config_path(app)?;
+    let content = serde_json::to_string_pretty(&ConfigStore { configs: deduped })
+        .map_err(|err| format!("配置序列化失败：{err}"))?;
+    fs::write(&path, content).map_err(|err| format!("无法写入配置文件：{err}"))
+}
+
+fn read_required_config(app: &tauri::AppHandle, provider: &str) -> Result<CloudConfig, String> {
+    let provider = provider_key(provider);
+    let config = read_saved_configs(app)?
+        .into_iter()
+        .find(|item| provider_key(&item.provider) == provider)
+        .ok_or_else(|| format!("请先保存 {} 配置", provider_label(&provider)))?;
     validate_config(&config)?;
     Ok(config)
 }
@@ -303,19 +349,11 @@ fn sign_request(
     ))
 }
 
-async fn call_dnspod(
-    app: &tauri::AppHandle,
+async fn call_dnspod_with_config(
+    config: &CloudConfig,
     action: &str,
     payload: Value,
 ) -> Result<Value, String> {
-    let config = read_required_config(app)?;
-    if provider_key(&config.provider) != PROVIDER_TENCENT {
-        return Err(format!(
-            "当前供应商不是 {}",
-            provider_label(PROVIDER_TENCENT)
-        ));
-    }
-
     let endpoint = normalize_endpoint(&config.provider, &config.endpoint);
     let host = endpoint_host(&endpoint)?;
     let payload_text =
@@ -324,7 +362,7 @@ async fn call_dnspod(
         .duration_since(UNIX_EPOCH)
         .map_err(|err| format!("系统时间早于 UNIX_EPOCH：{err}"))?
         .as_secs();
-    let authorization = sign_request(&config, &host, action, &payload_text, timestamp)?;
+    let authorization = sign_request(config, &host, action, &payload_text, timestamp)?;
 
     let client = reqwest::Client::new();
     let mut request = client
@@ -426,22 +464,6 @@ async fn call_cloudflare_with_config(
     }
 
     Ok(value)
-}
-
-async fn call_cloudflare(
-    app: &tauri::AppHandle,
-    method: Method,
-    path: &str,
-    payload: Option<Value>,
-) -> Result<Value, String> {
-    let config = read_required_config(app)?;
-    if provider_key(&config.provider) != PROVIDER_CLOUDFLARE {
-        return Err(format!(
-            "当前供应商不是 {}",
-            provider_label(PROVIDER_CLOUDFLARE)
-        ));
-    }
-    call_cloudflare_with_config(&config, method, path, payload).await
 }
 
 fn value_as_string(value: &Value, key: &str) -> String {
@@ -587,6 +609,7 @@ fn normalize_record_input(input: RecordInput) -> Result<RecordInput, String> {
         return Err("域名不能为空".to_string());
     }
 
+    let provider = provider_key(&input.provider);
     let sub_domain = if input.sub_domain.trim().is_empty() {
         "@".to_string()
     } else {
@@ -613,6 +636,7 @@ fn normalize_record_input(input: RecordInput) -> Result<RecordInput, String> {
     }
 
     Ok(RecordInput {
+        provider,
         domain: input.domain.trim().to_string(),
         record_id: input.record_id,
         sub_domain,
@@ -641,13 +665,13 @@ fn parse_dnspod_record_id(record_id: &str) -> Result<i64, String> {
 }
 
 async fn modify_dnspod_record_remark(
-    app: &tauri::AppHandle,
+    config: &CloudConfig,
     domain: &str,
     record_id: i64,
     remark: &str,
 ) -> Result<Option<String>, String> {
-    let response = call_dnspod(
-        app,
+    let response = call_dnspod_with_config(
+        config,
         "ModifyRecordRemark",
         json!({
             "Domain": domain,
@@ -683,54 +707,10 @@ fn cloudflare_record_payload(input: &RecordInput) -> Value {
     Value::Object(body)
 }
 
-#[tauri::command]
-fn load_config(app: tauri::AppHandle) -> Result<Option<PublicConfig>, String> {
-    read_saved_config(&app).map(|config| config.map(to_public_config))
-}
-
-#[tauri::command]
-fn save_config(app: tauri::AppHandle, config: SaveConfig) -> Result<PublicConfig, String> {
-    let existing = read_saved_config(&app)?;
-    let provider = provider_key(&config.provider);
-    let secret_id = config.secret_id.trim().to_string();
-    let secret_key = if config.secret_key.trim().is_empty()
-        && existing
-            .as_ref()
-            .map(|item| provider_key(&item.provider) == provider)
-            .unwrap_or(false)
-    {
-        existing
-            .as_ref()
-            .map(|item| item.secret_key.clone())
-            .unwrap_or_default()
-    } else {
-        config.secret_key.trim().to_string()
-    };
-
-    let stored = CloudConfig {
-        provider,
-        secret_id,
-        secret_key,
-        endpoint: normalize_endpoint(&config.provider, &config.endpoint),
-        region: config.region.trim().to_string(),
-    };
-    endpoint_host(&stored.endpoint)?;
-    validate_config(&stored)?;
-
-    let path = config_path(&app)?;
-    let content =
-        serde_json::to_string_pretty(&stored).map_err(|err| format!("配置序列化失败：{err}"))?;
-    fs::write(&path, content).map_err(|err| format!("无法写入配置文件：{err}"))?;
-
-    Ok(to_public_config(stored))
-}
-
-#[tauri::command]
-async fn verify_config(app: tauri::AppHandle) -> Result<VerifyResult, String> {
-    let config = read_required_config(&app)?;
+async fn verify_with_config(config: &CloudConfig) -> Result<VerifyResult, String> {
     match provider_key(&config.provider).as_str() {
         PROVIDER_CLOUDFLARE => {
-            let zones = cloudflare_zones(&config).await?;
+            let zones = cloudflare_zones(config).await?;
             let domains = cloudflare_domain_summaries(&zones);
             Ok(VerifyResult {
                 ok: true,
@@ -742,8 +722,8 @@ async fn verify_config(app: tauri::AppHandle) -> Result<VerifyResult, String> {
         }
         PROVIDER_ALIYUN => Err("阿里云配置已保存，但 DNS API 接入还在预留中".to_string()),
         _ => {
-            let response = call_dnspod(
-                &app,
+            let response = call_dnspod_with_config(
+                config,
                 "DescribeDomainList",
                 json!({
                     "Type": "ALL",
@@ -770,18 +750,116 @@ async fn verify_config(app: tauri::AppHandle) -> Result<VerifyResult, String> {
 }
 
 #[tauri::command]
-async fn list_records(app: tauri::AppHandle, domain: String) -> Result<Vec<DnsRecord>, String> {
+fn load_configs(app: tauri::AppHandle) -> Result<Vec<PublicConfig>, String> {
+    read_saved_configs(&app).map(|configs| configs.into_iter().map(to_public_config).collect())
+}
+
+#[tauri::command]
+fn load_config(app: tauri::AppHandle) -> Result<Option<PublicConfig>, String> {
+    read_saved_configs(&app).map(|configs| configs.into_iter().next().map(to_public_config))
+}
+
+#[tauri::command]
+fn save_config(app: tauri::AppHandle, config: SaveConfig) -> Result<PublicConfig, String> {
+    let mut configs = read_saved_configs(&app)?;
+    let provider = provider_key(&config.provider);
+    let existing = configs
+        .iter()
+        .find(|item| provider_key(&item.provider) == provider)
+        .cloned();
+    let secret_id = config.secret_id.trim().to_string();
+    let secret_key = if config.secret_key.trim().is_empty() {
+        existing
+            .as_ref()
+            .map(|item| item.secret_key.clone())
+            .unwrap_or_default()
+    } else {
+        config.secret_key.trim().to_string()
+    };
+
+    let stored = CloudConfig {
+        provider: provider.clone(),
+        secret_id,
+        secret_key,
+        endpoint: normalize_endpoint(&provider, &config.endpoint),
+        region: config.region.trim().to_string(),
+    };
+    endpoint_host(&stored.endpoint)?;
+    validate_config(&stored)?;
+
+    configs.retain(|item| provider_key(&item.provider) != provider);
+    configs.push(stored.clone());
+    write_saved_configs(&app, configs)?;
+
+    Ok(to_public_config(stored))
+}
+
+#[tauri::command]
+async fn verify_config(app: tauri::AppHandle, provider: String) -> Result<VerifyResult, String> {
+    let config = read_required_config(&app, &provider)?;
+    verify_with_config(&config).await
+}
+
+#[tauri::command]
+async fn verify_all_configs(app: tauri::AppHandle) -> Result<VerifyResult, String> {
+    let configs = read_saved_configs(&app)?;
+    if configs.is_empty() {
+        return Err("请先保存至少一个供应商配置".to_string());
+    }
+
+    let mut domains = Vec::new();
+    let mut failures = Vec::new();
+    for config in configs {
+        if validate_config(&config).is_err() {
+            continue;
+        }
+        match verify_with_config(&config).await {
+            Ok(result) => domains.extend(result.domains),
+            Err(error) => failures.push(format!("{}: {error}", provider_label(&config.provider))),
+        }
+    }
+
+    if domains.is_empty() && !failures.is_empty() {
+        return Err(failures.join("；"));
+    }
+
+    let message = if failures.is_empty() {
+        format!("已同步 {} 个域名", domains.len())
+    } else {
+        format!(
+            "已同步 {} 个域名；{} 个供应商未同步",
+            domains.len(),
+            failures.len()
+        )
+    };
+
+    Ok(VerifyResult {
+        ok: true,
+        message,
+        request_id: None,
+        domain_count: Some(domains.len() as u64),
+        domains,
+    })
+}
+
+#[tauri::command]
+async fn list_records(
+    app: tauri::AppHandle,
+    provider: String,
+    domain: String,
+) -> Result<Vec<DnsRecord>, String> {
+    let provider = provider_key(&provider);
     let domain = domain.trim().to_string();
     if domain.is_empty() {
         return Err("请先选择要管理的主域名".to_string());
     }
 
-    let config = read_required_config(&app)?;
-    match provider_key(&config.provider).as_str() {
+    let config = read_required_config(&app, &provider)?;
+    match provider.as_str() {
         PROVIDER_CLOUDFLARE => {
             let zone_id = cloudflare_zone_id(&config, &domain).await?;
-            let response = call_cloudflare(
-                &app,
+            let response = call_cloudflare_with_config(
+                &config,
                 Method::GET,
                 &format!("/zones/{zone_id}/dns_records?per_page=5000"),
                 None,
@@ -820,8 +898,8 @@ async fn list_records(app: tauri::AppHandle, domain: String) -> Result<Vec<DnsRe
         }
         PROVIDER_ALIYUN => Err("阿里云 DNS 记录管理还在预留中".to_string()),
         _ => {
-            let response = call_dnspod(
-                &app,
+            let response = call_dnspod_with_config(
+                &config,
                 "DescribeRecordList",
                 json!({
                     "Domain": domain,
@@ -867,12 +945,12 @@ async fn list_records(app: tauri::AppHandle, domain: String) -> Result<Vec<DnsRe
 #[tauri::command]
 async fn create_record(app: tauri::AppHandle, input: RecordInput) -> Result<ActionResult, String> {
     let input = normalize_record_input(input)?;
-    let config = read_required_config(&app)?;
-    match provider_key(&config.provider).as_str() {
+    let config = read_required_config(&app, &input.provider)?;
+    match provider_key(&input.provider).as_str() {
         PROVIDER_CLOUDFLARE => {
             let zone_id = cloudflare_zone_id(&config, &input.domain).await?;
-            let response = call_cloudflare(
-                &app,
+            let response = call_cloudflare_with_config(
+                &config,
                 Method::POST,
                 &format!("/zones/{zone_id}/dns_records"),
                 Some(cloudflare_record_payload(&input)),
@@ -892,8 +970,8 @@ async fn create_record(app: tauri::AppHandle, input: RecordInput) -> Result<Acti
         PROVIDER_ALIYUN => Err("阿里云 DNS 记录管理还在预留中".to_string()),
         _ => {
             let domain = input.domain.clone();
-            let response = call_dnspod(
-                &app,
+            let response = call_dnspod_with_config(
+                &config,
                 "CreateRecord",
                 json!({
                     "Domain": domain,
@@ -912,7 +990,7 @@ async fn create_record(app: tauri::AppHandle, input: RecordInput) -> Result<Acti
             if let Some(record_id_text) = record_id.as_ref() {
                 let record_id_number = parse_dnspod_record_id(record_id_text)?;
                 if !input.remark.is_empty() {
-                    modify_dnspod_record_remark(&app, &domain, record_id_number, &input.remark)
+                    modify_dnspod_record_remark(&config, &domain, record_id_number, &input.remark)
                         .await?;
                 }
             }
@@ -934,13 +1012,13 @@ async fn update_record(app: tauri::AppHandle, input: RecordInput) -> Result<Acti
         .record_id
         .clone()
         .ok_or_else(|| "缺少 RecordId".to_string())?;
-    let config = read_required_config(&app)?;
+    let config = read_required_config(&app, &input.provider)?;
 
-    match provider_key(&config.provider).as_str() {
+    match provider_key(&input.provider).as_str() {
         PROVIDER_CLOUDFLARE => {
             let zone_id = cloudflare_zone_id(&config, &input.domain).await?;
-            call_cloudflare(
-                &app,
+            call_cloudflare_with_config(
+                &config,
                 Method::PUT,
                 &format!("/zones/{zone_id}/dns_records/{record_id}"),
                 Some(cloudflare_record_payload(&input)),
@@ -957,8 +1035,8 @@ async fn update_record(app: tauri::AppHandle, input: RecordInput) -> Result<Acti
         _ => {
             let record_id_number = parse_dnspod_record_id(&record_id)?;
             let domain = input.domain.clone();
-            let response = call_dnspod(
-                &app,
+            let response = call_dnspod_with_config(
+                &config,
                 "ModifyRecord",
                 json!({
                     "Domain": domain,
@@ -973,7 +1051,7 @@ async fn update_record(app: tauri::AppHandle, input: RecordInput) -> Result<Acti
                 }),
             )
             .await?;
-            modify_dnspod_record_remark(&app, &domain, record_id_number, &input.remark).await?;
+            modify_dnspod_record_remark(&config, &domain, record_id_number, &input.remark).await?;
 
             Ok(ActionResult {
                 ok: true,
@@ -988,6 +1066,7 @@ async fn update_record(app: tauri::AppHandle, input: RecordInput) -> Result<Acti
 #[tauri::command]
 async fn delete_record(
     app: tauri::AppHandle,
+    provider: String,
     domain: String,
     record_id: String,
 ) -> Result<ActionResult, String> {
@@ -998,12 +1077,13 @@ async fn delete_record(
         return Err("RecordId 不正确".to_string());
     }
 
-    let config = read_required_config(&app)?;
-    match provider_key(&config.provider).as_str() {
+    let provider = provider_key(&provider);
+    let config = read_required_config(&app, &provider)?;
+    match provider.as_str() {
         PROVIDER_CLOUDFLARE => {
             let zone_id = cloudflare_zone_id(&config, domain.trim()).await?;
-            call_cloudflare(
-                &app,
+            call_cloudflare_with_config(
+                &config,
                 Method::DELETE,
                 &format!("/zones/{zone_id}/dns_records/{}", record_id.trim()),
                 None,
@@ -1019,8 +1099,8 @@ async fn delete_record(
         PROVIDER_ALIYUN => Err("阿里云 DNS 记录管理还在预留中".to_string()),
         _ => {
             let record_id_number = parse_dnspod_record_id(&record_id)?;
-            let response = call_dnspod(
-                &app,
+            let response = call_dnspod_with_config(
+                &config,
                 "DeleteRecord",
                 json!({
                     "Domain": domain.trim(),
@@ -1045,8 +1125,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             load_config,
+            load_configs,
             save_config,
             verify_config,
+            verify_all_configs,
             list_records,
             create_record,
             update_record,

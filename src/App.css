@@ -529,6 +529,43 @@ select.table-control {
   grid-template-columns: 1fr 1fr;
 }
 
+.provider-tabs {
+  display: grid;
+  gap: 9px;
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.provider-tab {
+  background: #ffffff;
+  border: 1px solid #dbe3dc;
+  border-radius: 8px;
+  color: #223029;
+  display: grid;
+  gap: 5px;
+  padding: 11px 12px;
+  text-align: left;
+}
+
+.provider-tab:hover:not(:disabled) {
+  background: #f5f8f6;
+  border-color: #cbd7cf;
+}
+
+.provider-tab.active {
+  background: #e8f4ee;
+  border-color: #66a589;
+}
+
+.provider-tab strong {
+  font-size: 13px;
+}
+
+.provider-tab span {
+  color: #6b7670;
+  font-size: 11px;
+  font-weight: 750;
+}
+
 .modal-form.two-column {
   grid-template-columns: 1fr 1fr;
 }
