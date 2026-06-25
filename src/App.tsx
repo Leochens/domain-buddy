@@ -7,6 +7,7 @@ type ProviderKey = "tencent" | "cloudflare" | "aliyun";
 type PublicConfig = {
   provider: ProviderKey;
   secretId: string;
+  secretKey: string;
   secretKeySaved: boolean;
   endpoint: string;
   region: string;
@@ -201,6 +202,26 @@ function RefreshIcon() {
   );
 }
 
+function EyeIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
+function EyeOffIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M3 3l18 18" />
+      <path d="M10.6 10.6A2 2 0 0 0 12 14a2 2 0 0 0 1.4-.6" />
+      <path d="M9.8 5.2A10.7 10.7 0 0 1 12 5c6.5 0 10 7 10 7a17.8 17.8 0 0 1-3 4.2" />
+      <path d="M6.6 6.6C3.7 8.5 2 12 2 12s3.5 7 10 7a10.8 10.8 0 0 0 4.1-.8" />
+    </svg>
+  );
+}
+
 function SettingsIcon() {
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24">
@@ -265,6 +286,7 @@ function App() {
   const [secretId, setSecretId] = useState("");
   const [secretKey, setSecretKey] = useState("");
   const [secretKeySaved, setSecretKeySaved] = useState(false);
+  const [secretVisible, setSecretVisible] = useState(false);
   const [endpoint, setEndpoint] = useState(providerMeta("tencent").endpoint);
   const [region, setRegion] = useState("");
   const [activeDomainKey, setActiveDomainKey] = useState("");
@@ -301,7 +323,7 @@ function App() {
         setConfigs(nextConfigs);
         if (nextConfigs.length) {
           applyConfigToForm(nextConfigs[0].provider, nextConfigs);
-          setNotice(`已加载 ${nextConfigs.length} 个供应商配置`);
+          void syncAllProviders();
         } else {
           setConfigOpen(true);
         }
@@ -318,8 +340,9 @@ function App() {
     const meta = providerMeta(provider);
     setConfigProvider(provider);
     setSecretId(existing?.secretId || "");
-    setSecretKey("");
+    setSecretKey(existing?.secretKey || "");
     setSecretKeySaved(Boolean(existing?.secretKeySaved));
+    setSecretVisible(false);
     setEndpoint(existing?.endpoint || meta.endpoint);
     setRegion(existing?.region || "");
   }
@@ -415,10 +438,6 @@ function App() {
   }
 
   async function refreshCurrent() {
-    if (activeDomain) {
-      await loadRecords(activeDomain);
-      return;
-    }
     if (configs.length) {
       await syncAllProviders();
       return;
@@ -571,17 +590,10 @@ function App() {
             className="icon-button"
             onClick={refreshCurrent}
             disabled={busy !== null || !desktopReady}
-            title={activeDomain ? "刷新解析记录" : "同步全部供应商"}
-            aria-label={activeDomain ? "刷新解析记录" : "同步全部供应商"}
+            title="同步全部供应商"
+            aria-label="同步全部供应商"
           >
             <RefreshIcon />
-          </button>
-          <button
-            className="secondary-button"
-            onClick={syncAllProviders}
-            disabled={!configs.length || busy !== null || !desktopReady}
-          >
-            同步全部
           </button>
           <button
             className="primary-button"
@@ -839,13 +851,24 @@ function App() {
               </label>
               <label>
                 {configFormProvider.secretKeyLabel}
-                <input
-                  value={secretKey}
-                  onChange={(event) => setSecretKey(event.currentTarget.value)}
-                  placeholder={secretKeySaved ? "留空保留已保存凭证" : configFormProvider.secretKeyPlaceholder}
-                  spellCheck={false}
-                  type="password"
-                />
+                <div className="secret-field">
+                  <input
+                    value={secretKey}
+                    onChange={(event) => setSecretKey(event.currentTarget.value)}
+                    placeholder={configFormProvider.secretKeyPlaceholder}
+                    spellCheck={false}
+                    type={secretVisible ? "text" : "password"}
+                  />
+                  <button
+                    className="field-icon-button"
+                    type="button"
+                    onClick={() => setSecretVisible((visible) => !visible)}
+                    title={secretVisible ? "隐藏凭证" : "显示凭证"}
+                    aria-label={secretVisible ? "隐藏凭证" : "显示凭证"}
+                  >
+                    {secretVisible ? <EyeOffIcon /> : <EyeIcon />}
+                  </button>
+                </div>
               </label>
               <label>
                 API Endpoint

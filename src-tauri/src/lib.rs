@@ -61,6 +61,7 @@ struct SaveConfig {
 struct PublicConfig {
     provider: String,
     secret_id: String,
+    secret_key: String,
     secret_key_saved: bool,
     endpoint: String,
     region: String,
@@ -290,6 +291,7 @@ fn to_public_config(config: CloudConfig) -> PublicConfig {
     PublicConfig {
         provider: provider_key(&config.provider),
         secret_id: config.secret_id,
+        secret_key: config.secret_key.clone(),
         secret_key_saved: !config.secret_key.trim().is_empty(),
         endpoint: config.endpoint,
         region: config.region,

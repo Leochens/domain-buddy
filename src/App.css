@@ -87,6 +87,44 @@ textarea:focus {
   box-shadow: 0 0 0 3px rgba(30, 122, 92, 0.12);
 }
 
+.secret-field {
+  display: grid;
+  gap: 7px;
+  grid-template-columns: minmax(0, 1fr) 38px;
+}
+
+.secret-field input {
+  min-width: 0;
+}
+
+.field-icon-button {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #dbe3dc;
+  border-radius: 7px;
+  color: #344139;
+  display: inline-flex;
+  justify-content: center;
+  min-height: 38px;
+  padding: 0;
+  transition:
+    background 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease,
+    transform 150ms ease;
+  width: 38px;
+}
+
+.field-icon-button:hover:not(:disabled) {
+  background: #eef3f0;
+  border-color: #cbd7cf;
+  color: #176247;
+}
+
+.field-icon-button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
 label {
   color: #5f6b63;
   display: grid;
@@ -251,21 +289,21 @@ label {
 
 .domain-strip {
   display: grid;
-  gap: 10px;
-  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
-  margin: 18px 0 14px;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(154px, 1fr));
+  margin: 14px 0 12px;
 }
 
 .domain-chip {
   background: #ffffff;
   border: 1px solid #dfe6e0;
-  border-radius: 8px;
+  border-radius: 7px;
   color: #23312a;
   display: grid;
-  gap: 6px;
+  gap: 5px;
   line-height: 1.2;
   min-width: 0;
-  padding: 12px;
+  padding: 9px 10px;
   text-align: left;
 }
 
@@ -283,7 +321,7 @@ label {
 }
 
 .domain-chip strong {
-  font-size: 13px;
+  font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -291,7 +329,7 @@ label {
 
 .domain-chip span {
   color: #6b7670;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 750;
 }
 
@@ -301,9 +339,9 @@ label {
   border-radius: 999px;
   color: #176247 !important;
   display: inline-flex;
-  font-size: 10px !important;
+  font-size: 9px !important;
   font-weight: 850 !important;
-  padding: 4px 7px;
+  padding: 3px 6px;
   width: fit-content;
 }
 
