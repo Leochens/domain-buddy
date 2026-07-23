@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
 
-type ProviderKey = "tencent" | "cloudflare" | "aliyun";
+type ProviderKey = "tencent" | "cloudflare" | "aliyun" | "volcengine";
 
 type PublicConfig = {
   provider: ProviderKey;
@@ -101,6 +101,19 @@ const providerOptions: ProviderOption[] = [
     secretKeyPlaceholder: "需要 Zone Read / DNS Edit 权限",
     regionLabel: "Region",
     regionPlaceholder: "Cloudflare 可留空",
+  },
+  {
+    value: "volcengine",
+    label: "火山引擎 DNS",
+    shortLabel: "Volc",
+    status: "已支持",
+    endpoint: "https://dns.volcengineapi.com",
+    secretIdLabel: "AccessKeyId",
+    secretIdPlaceholder: "AKLT...",
+    secretKeyLabel: "SecretAccessKey",
+    secretKeyPlaceholder: "火山引擎访问密钥",
+    regionLabel: "Region",
+    regionPlaceholder: "默认 cn-beijing",
   },
   {
     value: "aliyun",
@@ -307,6 +320,13 @@ function App() {
   );
   const configFormProvider = providerMeta(configProvider);
   const activeProviderLabel = activeDomain?.providerLabel || `${configs.length} 个供应商`;
+  const weightFieldLabel = activeDomain?.provider === "volcengine" ? "权重" : "MX";
+  const recordLinePlaceholder =
+    activeDomain?.provider === "cloudflare"
+      ? "DNS only 或 Proxied"
+      : activeDomain?.provider === "volcengine"
+        ? "default"
+        : "默认";
   const recordValueOptions = useMemo(
     () => Array.from(new Set(records.map((record) => record.value).filter(Boolean))).sort(),
     [records],
@@ -952,7 +972,7 @@ function App() {
                   onChange={(event) =>
                     setRecordForm({ ...recordForm, recordLine: event.currentTarget.value })
                   }
-                  placeholder={activeDomain.provider === "cloudflare" ? "DNS only 或 Proxied" : "默认"}
+                  placeholder={recordLinePlaceholder}
                 />
               </label>
               <label>
@@ -966,7 +986,7 @@ function App() {
                 />
               </label>
               <label>
-                MX
+                {weightFieldLabel}
                 <input
                   value={recordForm.mx}
                   onChange={(event) =>

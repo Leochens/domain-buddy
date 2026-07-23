@@ -1,3 +1,5 @@
+mod providers;
+
 use hmac::{Hmac, Mac};
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
@@ -14,11 +16,13 @@ use time::{format_description, OffsetDateTime};
 const PROVIDER_TENCENT: &str = "tencent";
 const PROVIDER_CLOUDFLARE: &str = "cloudflare";
 const PROVIDER_ALIYUN: &str = "aliyun";
+pub(crate) const PROVIDER_VOLCENGINE: &str = "volcengine";
 const DEFAULT_TENCENT_ENDPOINT: &str = "https://dnspod.tencentcloudapi.com";
 const DEFAULT_CLOUDFLARE_ENDPOINT: &str = "https://api.cloudflare.com/client/v4";
 const DEFAULT_ALIYUN_ENDPOINT: &str = "https://alidns.aliyuncs.com";
-const DEFAULT_RECORD_LINE: &str = "默认";
-const DEFAULT_STATUS: &str = "ENABLE";
+const DEFAULT_VOLCENGINE_ENDPOINT: &str = "https://dns.volcengineapi.com";
+pub(crate) const DEFAULT_RECORD_LINE: &str = "默认";
+pub(crate) const DEFAULT_STATUS: &str = "ENABLE";
 const DNSPOD_SERVICE: &str = "dnspod";
 const DNSPOD_VERSION: &str = "2021-03-23";
 
@@ -32,15 +36,15 @@ struct ConfigStore {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct CloudConfig {
+pub(crate) struct CloudConfig {
     #[serde(default = "default_provider")]
-    provider: String,
+    pub(crate) provider: String,
     #[serde(default)]
-    secret_id: String,
-    secret_key: String,
-    endpoint: String,
+    pub(crate) secret_id: String,
+    pub(crate) secret_key: String,
+    pub(crate) endpoint: String,
     #[serde(default)]
-    region: String,
+    pub(crate) region: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,70 +73,70 @@ struct PublicConfig {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ActionResult {
-    ok: bool,
-    message: String,
-    request_id: Option<String>,
-    record_id: Option<String>,
+pub(crate) struct ActionResult {
+    pub(crate) ok: bool,
+    pub(crate) message: String,
+    pub(crate) request_id: Option<String>,
+    pub(crate) record_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct VerifyResult {
-    ok: bool,
-    message: String,
-    request_id: Option<String>,
-    domain_count: Option<u64>,
-    domains: Vec<DomainSummary>,
+pub(crate) struct VerifyResult {
+    pub(crate) ok: bool,
+    pub(crate) message: String,
+    pub(crate) request_id: Option<String>,
+    pub(crate) domain_count: Option<u64>,
+    pub(crate) domains: Vec<DomainSummary>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DomainSummary {
-    domain_id: String,
-    provider: String,
-    provider_label: String,
-    name: String,
-    status: String,
-    dns_status: String,
-    grade_title: String,
-    record_count: u64,
-    remark: String,
-    updated_on: String,
+pub(crate) struct DomainSummary {
+    pub(crate) domain_id: String,
+    pub(crate) provider: String,
+    pub(crate) provider_label: String,
+    pub(crate) name: String,
+    pub(crate) status: String,
+    pub(crate) dns_status: String,
+    pub(crate) grade_title: String,
+    pub(crate) record_count: u64,
+    pub(crate) remark: String,
+    pub(crate) updated_on: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DnsRecord {
-    record_id: String,
-    name: String,
-    record_type: String,
-    line: String,
-    line_id: String,
-    value: String,
-    ttl: u64,
-    mx: u64,
-    status: String,
-    updated_on: String,
-    remark: String,
-    default_ns: bool,
+pub(crate) struct DnsRecord {
+    pub(crate) record_id: String,
+    pub(crate) name: String,
+    pub(crate) record_type: String,
+    pub(crate) line: String,
+    pub(crate) line_id: String,
+    pub(crate) value: String,
+    pub(crate) ttl: u64,
+    pub(crate) mx: u64,
+    pub(crate) status: String,
+    pub(crate) updated_on: String,
+    pub(crate) remark: String,
+    pub(crate) default_ns: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct RecordInput {
-    provider: String,
-    domain: String,
-    record_id: Option<String>,
-    sub_domain: String,
-    record_type: String,
-    record_line: String,
-    value: String,
-    ttl: Option<u64>,
-    mx: Option<u64>,
-    status: String,
+pub(crate) struct RecordInput {
+    pub(crate) provider: String,
+    pub(crate) domain: String,
+    pub(crate) record_id: Option<String>,
+    pub(crate) sub_domain: String,
+    pub(crate) record_type: String,
+    pub(crate) record_line: String,
+    pub(crate) value: String,
+    pub(crate) ttl: Option<u64>,
+    pub(crate) mx: Option<u64>,
+    pub(crate) status: String,
     #[serde(default)]
-    remark: String,
+    pub(crate) remark: String,
 }
 
 fn default_provider() -> String {
@@ -152,6 +156,7 @@ fn provider_label(provider: &str) -> &'static str {
     match provider_key(provider).as_str() {
         PROVIDER_CLOUDFLARE => "Cloudflare",
         PROVIDER_ALIYUN => "阿里云 DNS",
+        PROVIDER_VOLCENGINE => "火山引擎 DNS",
         _ => "腾讯云 DNSPod",
     }
 }
@@ -160,6 +165,7 @@ fn default_endpoint_for_provider(provider: &str) -> &'static str {
     match provider_key(provider).as_str() {
         PROVIDER_CLOUDFLARE => DEFAULT_CLOUDFLARE_ENDPOINT,
         PROVIDER_ALIYUN => DEFAULT_ALIYUN_ENDPOINT,
+        PROVIDER_VOLCENGINE => DEFAULT_VOLCENGINE_ENDPOINT,
         _ => DEFAULT_TENCENT_ENDPOINT,
     }
 }
@@ -273,6 +279,13 @@ fn validate_config(config: &CloudConfig) -> Result<(), String> {
         PROVIDER_ALIYUN => {
             if config.secret_id.trim().is_empty() || config.secret_key.trim().is_empty() {
                 Err("阿里云 AccessKeyId 和 AccessKeySecret 不能为空".to_string())
+            } else {
+                Ok(())
+            }
+        }
+        PROVIDER_VOLCENGINE => {
+            if config.secret_id.trim().is_empty() || config.secret_key.trim().is_empty() {
+                Err("火山引擎 AccessKeyId 和 SecretAccessKey 不能为空".to_string())
             } else {
                 Ok(())
             }
@@ -722,6 +735,7 @@ async fn verify_with_config(config: &CloudConfig) -> Result<VerifyResult, String
                 domains,
             })
         }
+        PROVIDER_VOLCENGINE => providers::volcengine::verify(config).await,
         PROVIDER_ALIYUN => Err("阿里云配置已保存，但 DNS API 接入还在预留中".to_string()),
         _ => {
             let response = call_dnspod_with_config(
@@ -898,6 +912,7 @@ async fn list_records(
                 .unwrap_or_default();
             Ok(records)
         }
+        PROVIDER_VOLCENGINE => providers::volcengine::list_records(&config, &domain).await,
         PROVIDER_ALIYUN => Err("阿里云 DNS 记录管理还在预留中".to_string()),
         _ => {
             let response = call_dnspod_with_config(
@@ -969,6 +984,7 @@ async fn create_record(app: tauri::AppHandle, input: RecordInput) -> Result<Acti
                 record_id,
             })
         }
+        PROVIDER_VOLCENGINE => providers::volcengine::create_record(&config, &input).await,
         PROVIDER_ALIYUN => Err("阿里云 DNS 记录管理还在预留中".to_string()),
         _ => {
             let domain = input.domain.clone();
@@ -1032,6 +1048,9 @@ async fn update_record(app: tauri::AppHandle, input: RecordInput) -> Result<Acti
                 request_id: None,
                 record_id: Some(record_id),
             })
+        }
+        PROVIDER_VOLCENGINE => {
+            providers::volcengine::update_record(&config, &input, &record_id).await
         }
         PROVIDER_ALIYUN => Err("阿里云 DNS 记录管理还在预留中".to_string()),
         _ => {
@@ -1098,6 +1117,7 @@ async fn delete_record(
                 record_id: Some(record_id),
             })
         }
+        PROVIDER_VOLCENGINE => providers::volcengine::delete_record(&config, &record_id).await,
         PROVIDER_ALIYUN => Err("阿里云 DNS 记录管理还在预留中".to_string()),
         _ => {
             let record_id_number = parse_dnspod_record_id(&record_id)?;
