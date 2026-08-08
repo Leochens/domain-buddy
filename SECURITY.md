@@ -35,6 +35,11 @@
 
 仅报告第三方云厂商自身的问题时，请优先联系对应厂商；如果 Domain Buddy 的实现放大或引入了该问题，也欢迎同时私密报告。
 
+## 已知上游安全提示
+
+- Linux 构建通过 Tauri / WebKitGTK 间接依赖 `glib 0.18.x`，因此会匹配 [GHSA-wrw7-89jp-8q8g](https://github.com/advisories/GHSA-wrw7-89jp-8q8g)。该问题影响 `glib::VariantStrIter` 的特定迭代方法；Domain Buddy 没有直接调用这些 API，RustSec 将其归类为 informational unsoundness。
+- 修复版本要求 `glib >= 0.20`，当前 Tauri 的 GTK3 依赖链尚不兼容。项目会持续跟进 Tauri / WebKitGTK 升级，在上游依赖允许后及时更新；macOS 与 Windows 构建不包含这条 Linux GTK3 依赖链。
+
 ## 安全奖励
 
 项目目前没有漏洞赏金计划，但会在征得报告者同意后公开致谢。
