@@ -584,14 +584,12 @@ function App() {
             <div className="provider-tabs">
               {providerOptions.map((item) => {
                 const saved = Boolean(configForProvider(item.value));
-                const enabled = item.value !== "aliyun";
                 return (
                   <button
                     key={item.value}
                     className={configProvider === item.value ? "provider-tab active" : "provider-tab"}
                     onClick={() => applyConfigToForm(item.value)}
-                    disabled={!enabled}
-                    title={enabled ? item.label : "尚未接入，当前版本不会收集或保存阿里云凭证"}
+                    title={item.label}
                   >
                     <strong>{item.shortLabel}</strong>
                     <span>{saved ? "已保存" : item.status}</span>

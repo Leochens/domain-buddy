@@ -23,7 +23,7 @@
 
 ![Domain Buddy 界面预览](https://raw.githubusercontent.com/Leochens/domain-buddy/main/assets/domain-buddy-preview.png)
 
-项目目前还是早期版本：阿里云入口只做了预留，尚未接入；也暂时没有官方签名的安装包，需要按 README 从源码运行或构建。修改 DNS 会直接调用供应商 API，建议使用最小权限凭证，并先在非关键域名上验证。
+项目目前还是早期版本，已支持腾讯云 DNSPod、Cloudflare、火山引擎 DNS 和阿里云 DNS；暂时没有官方签名的安装包，需要按 README 从源码运行或构建。修改 DNS 会直接调用供应商 API，建议使用最小权限凭证，并先在非关键域名上验证。
 
 仓库地址：<https://github.com/Leochens/domain-buddy>
 

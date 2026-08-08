@@ -20,7 +20,7 @@ use pagination::{OffsetPager, PageNumberPager};
 
 const PROVIDER_TENCENT: &str = "tencent";
 const PROVIDER_CLOUDFLARE: &str = "cloudflare";
-const PROVIDER_ALIYUN: &str = "aliyun";
+pub(crate) const PROVIDER_ALIYUN: &str = "aliyun";
 pub(crate) const PROVIDER_VOLCENGINE: &str = "volcengine";
 const DEFAULT_TENCENT_ENDPOINT: &str = "https://dnspod.tencentcloudapi.com";
 const DEFAULT_CLOUDFLARE_ENDPOINT: &str = "https://api.cloudflare.com/client/v4";
@@ -323,9 +323,7 @@ fn read_saved_configs(app: &tauri::AppHandle) -> Result<Vec<CloudConfig>, String
     };
 
     configs = configs.into_iter().map(normalize_config).collect();
-    let original_count = configs.len();
-    configs.retain(|config| provider_key(&config.provider) != PROVIDER_ALIYUN);
-    let mut metadata_changed = configs.len() != original_count;
+    let mut metadata_changed = false;
     for config in &mut configs {
         if validate_provider_endpoint(&config.provider, &config.endpoint).is_err() {
             config.endpoint = default_endpoint_for_provider(&config.provider).to_string();
@@ -1084,7 +1082,7 @@ async fn verify_with_config(config: &CloudConfig) -> Result<VerifyResult, String
             })
         }
         PROVIDER_VOLCENGINE => providers::volcengine::verify(config).await,
-        PROVIDER_ALIYUN => Err("阿里云配置已保存，但 DNS API 接入还在预留中".to_string()),
+        PROVIDER_ALIYUN => providers::aliyun::verify(config).await,
         _ => {
             let (domains, request_id) = dnspod_domains(config).await?;
 
@@ -1112,10 +1110,6 @@ fn load_config(app: tauri::AppHandle) -> Result<Option<PublicConfig>, String> {
 #[tauri::command]
 fn save_config(app: tauri::AppHandle, config: SaveConfig) -> Result<PublicConfig, String> {
     let provider = provider_key(&config.provider);
-    if provider == PROVIDER_ALIYUN {
-        return Err("阿里云 DNS 尚未接入，当前版本不会保存其访问凭证".to_string());
-    }
-
     let mut configs = read_saved_configs(&app)?;
     let existing = configs
         .iter()
@@ -1244,7 +1238,7 @@ async fn list_records(
             cloudflare_records(&config, &zone_id, &domain).await
         }
         PROVIDER_VOLCENGINE => providers::volcengine::list_records(&config, &domain).await,
-        PROVIDER_ALIYUN => Err("阿里云 DNS 记录管理还在预留中".to_string()),
+        PROVIDER_ALIYUN => providers::aliyun::list_records(&config, &domain).await,
         _ => dnspod_records(&config, &domain).await,
     }
 }
@@ -1275,7 +1269,7 @@ async fn create_record(app: tauri::AppHandle, input: RecordInput) -> Result<Acti
             })
         }
         PROVIDER_VOLCENGINE => providers::volcengine::create_record(&config, &input).await,
-        PROVIDER_ALIYUN => Err("阿里云 DNS 记录管理还在预留中".to_string()),
+        PROVIDER_ALIYUN => providers::aliyun::create_record(&config, &input).await,
         _ => {
             let domain = input.domain.clone();
             let response = call_dnspod_with_config(
@@ -1342,7 +1336,7 @@ async fn update_record(app: tauri::AppHandle, input: RecordInput) -> Result<Acti
         PROVIDER_VOLCENGINE => {
             providers::volcengine::update_record(&config, &input, &record_id).await
         }
-        PROVIDER_ALIYUN => Err("阿里云 DNS 记录管理还在预留中".to_string()),
+        PROVIDER_ALIYUN => providers::aliyun::update_record(&config, &input, &record_id).await,
         _ => {
             let record_id_number = parse_dnspod_record_id(&record_id)?;
             let domain = input.domain.clone();
@@ -1410,7 +1404,9 @@ async fn delete_record(
         PROVIDER_VOLCENGINE => {
             providers::volcengine::delete_record(&config, domain.trim(), &record_id).await
         }
-        PROVIDER_ALIYUN => Err("阿里云 DNS 记录管理还在预留中".to_string()),
+        PROVIDER_ALIYUN => {
+            providers::aliyun::delete_record(&config, domain.trim(), &record_id).await
+        }
         _ => {
             let record_id_number = parse_dnspod_record_id(&record_id)?;
             let response = call_dnspod_with_config(

@@ -18,6 +18,7 @@
     "dns",
     "dnspod",
     "cloudflare",
+    "aliyun",
     "volcengine"
   ],
   "type": "module",

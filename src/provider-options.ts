@@ -44,14 +44,14 @@ export const providerOptions: ProviderOption[] = [
     value: "aliyun",
     label: "阿里云 DNS",
     shortLabel: "Aliyun",
-    status: "配置预留",
+    status: "已支持",
     endpoint: "https://alidns.aliyuncs.com",
     secretIdLabel: "AccessKeyId",
     secretIdPlaceholder: "LTAI...",
     secretKeyLabel: "AccessKeySecret",
     secretKeyPlaceholder: "阿里云访问密钥",
     regionLabel: "Region",
-    regionPlaceholder: "例如 cn-hangzhou",
+    regionPlaceholder: "AliDNS 无需填写",
   },
 ];
 
