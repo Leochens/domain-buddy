@@ -131,6 +131,10 @@ domain-buddy/
 
 欢迎提交 Bug、功能建议和 Pull Request。开始前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md) 与 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)。新增供应商时，请保持供应商 API 适配与界面逻辑分离，并且不要提交真实凭证或域名数据。
 
+## 社区支持
+
+感谢 [LINUX DO](https://linux.do/) 社区对 Domain Buddy 的支持。
+
 ## 许可证
 
 Domain Buddy 使用 [MIT License](LICENSE) 开源。
