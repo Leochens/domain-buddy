@@ -11,6 +11,24 @@ node_modules
 dist
 dist-ssr
 *.local
+.env
+.env.*
+!.env.example
+
+# Credentials, certificates, local databases, and backups
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.db
+*.sqlite
+*.sqlite3
+*.bak
+*.backup
+tencent-cloud.json
+domain-buddy.json
 
 # Editor directories and files
 .vscode/*

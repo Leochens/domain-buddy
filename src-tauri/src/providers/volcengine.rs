@@ -5,8 +5,8 @@ use sha2::{Digest, Sha256};
 use time::{format_description, OffsetDateTime};
 
 use crate::{
-    ActionResult, CloudConfig, DnsRecord, DomainSummary, RecordInput, VerifyResult, DEFAULT_STATUS,
-    PROVIDER_VOLCENGINE,
+    pagination::PageNumberPager, provider_http_client, ActionResult, CloudConfig, DnsRecord,
+    DomainSummary, RecordInput, VerifyResult, DEFAULT_STATUS, PROVIDER_VOLCENGINE,
 };
 
 type HmacSha256 = Hmac<Sha256>;
@@ -36,7 +36,8 @@ pub(crate) async fn list_records(
 ) -> Result<Vec<DnsRecord>, String> {
     let zid = zone_id(config, domain).await?;
     let mut records = Vec::new();
-    let mut page = 1_i64;
+    let mut pager = PageNumberPager::default();
+    let mut total = None;
 
     loop {
         let response = call_dns(
@@ -44,21 +45,23 @@ pub(crate) async fn list_records(
             "ListRecords",
             json!({
                 "ZID": zid,
-                "PageNumber": page,
+                "PageNumber": pager.page(),
                 "PageSize": 500
             }),
         )
         .await?;
         let result = response_result(&response)?;
-        if let Some(items) = result.get("Records").and_then(Value::as_array) {
-            records.extend(items.iter().map(record_summary));
-        }
-
-        let total = value_as_u64(result, "TotalCount");
-        if records.len() as u64 >= total || page >= 20 {
+        total = result.get("TotalCount").and_then(Value::as_u64).or(total);
+        let page = result
+            .get("Records")
+            .and_then(Value::as_array)
+            .map(|items| items.iter().map(record_summary).collect::<Vec<_>>())
+            .unwrap_or_default();
+        let has_next = pager.advance(page.len(), None, total, "火山引擎解析记录")?;
+        records.extend(page);
+        if !has_next {
             break;
         }
-        page += 1;
     }
 
     Ok(records)
@@ -94,6 +97,7 @@ pub(crate) async fn update_record(
     input: &RecordInput,
     record_id: &str,
 ) -> Result<ActionResult, String> {
+    ensure_record_belongs_to_domain(config, &input.domain, record_id).await?;
     let response = call_dns(
         config,
         "UpdateRecord",
@@ -117,8 +121,10 @@ pub(crate) async fn update_record(
 
 pub(crate) async fn delete_record(
     config: &CloudConfig,
+    domain: &str,
     record_id: &str,
 ) -> Result<ActionResult, String> {
+    ensure_record_belongs_to_domain(config, domain, record_id).await?;
     let response = call_dns(
         config,
         "DeleteRecord",
@@ -134,6 +140,24 @@ pub(crate) async fn delete_record(
         request_id: request_id(&response),
         record_id: Some(record_id.to_string()),
     })
+}
+
+async fn ensure_record_belongs_to_domain(
+    config: &CloudConfig,
+    domain: &str,
+    record_id: &str,
+) -> Result<(), String> {
+    let belongs_to_domain = list_records(config, domain)
+        .await?
+        .iter()
+        .any(|record| record.record_id == record_id.trim());
+    if belongs_to_domain {
+        Ok(())
+    } else {
+        Err(format!(
+            "记录 {record_id} 不属于当前域名 {domain}，已拒绝操作"
+        ))
+    }
 }
 
 async fn set_record_status(
@@ -155,28 +179,31 @@ async fn set_record_status(
 
 async fn list_zones(config: &CloudConfig) -> Result<Vec<Value>, String> {
     let mut zones = Vec::new();
-    let mut page = 1_i64;
+    let mut pager = PageNumberPager::default();
+    let mut total = None;
 
     loop {
         let response = call_dns(
             config,
             "ListZones",
             json!({
-                "PageNumber": page,
+                "PageNumber": pager.page(),
                 "PageSize": 500
             }),
         )
         .await?;
         let result = response_result(&response)?;
-        if let Some(items) = result.get("Zones").and_then(Value::as_array) {
-            zones.extend(items.iter().cloned());
-        }
-
-        let total = value_as_u64(result, "Total");
-        if zones.len() as u64 >= total || page >= 20 {
+        total = result.get("Total").and_then(Value::as_u64).or(total);
+        let page = result
+            .get("Zones")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let has_next = pager.advance(page.len(), None, total, "火山引擎域名")?;
+        zones.extend(page);
+        if !has_next {
             break;
         }
-        page += 1;
     }
 
     Ok(zones)
@@ -202,7 +229,7 @@ async fn call_dns(config: &CloudConfig, action: &str, payload: Value) -> Result<
     let authorization = authorization(config, &region, &host, &date, &payload_hash, &query)?;
     let url = format!("{}/?{query}", endpoint.trim_end_matches('/'));
 
-    let response = reqwest::Client::new()
+    let response = provider_http_client()?
         .request(Method::POST, url)
         .header("Authorization", authorization)
         .header("Content-Type", CONTENT_TYPE)
@@ -346,8 +373,9 @@ fn sha256_hex(input: &[u8]) -> String {
 }
 
 fn request_date() -> Result<String, String> {
-    let format = format_description::parse("[year][month][day]T[hour][minute][second]Z")
-        .map_err(|err| format!("时间格式初始化失败：{err}"))?;
+    let format =
+        format_description::parse_borrowed::<3>("[year][month][day]T[hour][minute][second]Z")
+            .map_err(|err| format!("时间格式初始化失败：{err}"))?;
     OffsetDateTime::now_utc()
         .format(&format)
         .map_err(|err| format!("时间格式化失败：{err}"))

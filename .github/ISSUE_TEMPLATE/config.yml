@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 私密报告安全漏洞
+    url: https://github.com/Leochens/domain-buddy/security/advisories/new
+    about: 请勿公开披露凭证泄露、权限绕过或其他安全问题。

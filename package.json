@@ -2,18 +2,38 @@
   "name": "domain-buddy",
   "private": true,
   "version": "0.1.0",
+  "description": "Local multi-provider DNS management desktop app built with Tauri",
+  "author": "Leochens",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Leochens/domain-buddy.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Leochens/domain-buddy/issues"
+  },
+  "homepage": "https://github.com/Leochens/domain-buddy#readme",
+  "keywords": [
+    "tauri",
+    "dns",
+    "dnspod",
+    "cloudflare",
+    "volcengine"
+  ],
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "rust:check": "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check && cargo check --locked --manifest-path src-tauri/Cargo.toml",
+    "rust:test": "cargo test --locked --manifest-path src-tauri/Cargo.toml",
+    "check": "npm run build && npm run rust:check && npm run rust:test",
     "preview": "vite preview",
     "tauri": "tauri"
   },
   "dependencies": {
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
-    "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-opener": "^2"
+    "@tauri-apps/api": "^2"
   },
   "devDependencies": {
     "@types/react": "^19.1.8",

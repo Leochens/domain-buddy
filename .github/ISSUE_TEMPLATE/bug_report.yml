@@ -1,0 +1,75 @@
+name: Bug 报告
+description: 报告可以稳定复现的问题
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。安全漏洞请改用 Security Advisories，不要在这里公开凭证或真实域名数据。
+  - type: input
+    id: version
+    attributes:
+      label: Domain Buddy 版本
+      placeholder: 例如 0.1.0 或 commit hash
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: 操作系统
+      placeholder: 例如 macOS 15.6 / Windows 11 / Ubuntu 24.04
+    validations:
+      required: true
+  - type: dropdown
+    id: provider
+    attributes:
+      label: DNS 供应商
+      options:
+        - 腾讯云 DNSPod
+        - Cloudflare
+        - 火山引擎 DNS
+        - 阿里云 DNS（预留）
+        - 与供应商无关
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 请使用脱敏数据，写出最小且稳定的复现步骤。
+      placeholder: |
+        1. 打开……
+        2. 选择……
+        3. 点击……
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期行为
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际行为
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 脱敏日志或截图
+      description: 不要提交 SecretKey、Token、账号 ID、真实域名、解析值或本地用户名路径。
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我已搜索现有 Issue，没有发现相同问题。
+          required: true
+        - label: 我已移除凭证、域名和其他隐私数据。
+          required: true
+        - label: 这不是需要私密报告的安全漏洞。
+          required: true

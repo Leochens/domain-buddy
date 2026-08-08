@@ -1,3 +1,5 @@
+mod credential_store;
+mod pagination;
 mod providers;
 
 use hmac::{Hmac, Mac};
@@ -6,12 +8,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::{
-    fs,
+    fs::{self, OpenOptions},
+    io::Write,
     path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
 };
 use tauri::Manager;
 use time::{format_description, OffsetDateTime};
+
+use pagination::{OffsetPager, PageNumberPager};
 
 const PROVIDER_TENCENT: &str = "tencent";
 const PROVIDER_CLOUDFLARE: &str = "cloudflare";
@@ -25,29 +30,33 @@ pub(crate) const DEFAULT_RECORD_LINE: &str = "默认";
 pub(crate) const DEFAULT_STATUS: &str = "ENABLE";
 const DNSPOD_SERVICE: &str = "dnspod";
 const DNSPOD_VERSION: &str = "2021-03-23";
+const DNSPOD_PAGE_SIZE: u64 = 3_000;
+const CLOUDFLARE_ZONE_PAGE_SIZE: u64 = 50;
+const CLOUDFLARE_RECORD_PAGE_SIZE: u64 = 5_000;
 
 type HmacSha256 = Hmac<Sha256>;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ConfigStore {
     configs: Vec<CloudConfig>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CloudConfig {
     #[serde(default = "default_provider")]
     pub(crate) provider: String,
     #[serde(default)]
     pub(crate) secret_id: String,
+    #[serde(default, skip_serializing)]
     pub(crate) secret_key: String,
     pub(crate) endpoint: String,
     #[serde(default)]
     pub(crate) region: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SaveConfig {
     #[serde(default = "default_provider")]
@@ -65,7 +74,6 @@ struct SaveConfig {
 struct PublicConfig {
     provider: String,
     secret_id: String,
-    secret_key: String,
     secret_key_saved: bool,
     endpoint: String,
     region: String,
@@ -170,13 +178,61 @@ fn default_endpoint_for_provider(provider: &str) -> &'static str {
     }
 }
 
-fn config_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+fn isolated_config_override() -> Option<PathBuf> {
+    #[cfg(debug_assertions)]
+    {
+        std::env::var_os("DOMAIN_BUDDY_CONFIG_DIR")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        None
+    }
+}
+
+fn config_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    if let Some(dir) = isolated_config_override() {
+        if !dir.is_absolute() {
+            return Err("DOMAIN_BUDDY_CONFIG_DIR 必须是绝对路径".to_string());
+        }
+        let metadata = fs::symlink_metadata(&dir)
+            .map_err(|error| format!("隔离配置目录必须由 mktemp -d 预先创建：{error}"))?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err("隔离配置路径必须是实际目录，不能是符号链接".to_string());
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if metadata.permissions().mode() & 0o077 != 0 {
+                return Err("隔离配置目录权限过宽，请使用 mktemp -d 创建".to_string());
+            }
+        }
+        return Ok(dir);
+    }
+
     let dir = app
         .path()
         .app_config_dir()
         .map_err(|err| format!("无法读取应用配置目录：{err}"))?;
     fs::create_dir_all(&dir).map_err(|err| format!("无法创建应用配置目录：{err}"))?;
-    Ok(dir.join("tencent-cloud.json"))
+    Ok(dir)
+}
+
+fn config_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    Ok(config_dir(app)?.join("tencent-cloud.json"))
+}
+
+fn credential_account(app: &tauri::AppHandle, provider: &str) -> Result<String, String> {
+    let provider = provider_key(provider);
+    if isolated_config_override().is_none() {
+        return Ok(provider);
+    }
+
+    let dir = config_dir(app)?;
+    let stable_dir = dir.canonicalize().unwrap_or(dir);
+    let profile_hash = sha256_hex(&stable_dir.to_string_lossy());
+    Ok(format!("isolated-{}:{provider}", &profile_hash[..16]))
 }
 
 fn normalize_endpoint(provider: &str, endpoint: &str) -> String {
@@ -195,16 +251,46 @@ fn normalize_endpoint(provider: &str, endpoint: &str) -> String {
 }
 
 fn endpoint_host(endpoint: &str) -> Result<String, String> {
-    let without_scheme = endpoint
-        .strip_prefix("https://")
-        .or_else(|| endpoint.strip_prefix("http://"))
-        .ok_or_else(|| "Endpoint 必须以 http:// 或 https:// 开头".to_string())?;
-    let host = without_scheme.split('/').next().unwrap_or_default().trim();
-    if host.is_empty() {
-        Err("Endpoint 缺少主机名".to_string())
+    let url =
+        reqwest::Url::parse(endpoint).map_err(|error| format!("Endpoint 不是合法 URL：{error}"))?;
+    url.host_str()
+        .map(ToString::to_string)
+        .ok_or_else(|| "Endpoint 缺少主机名".to_string())
+}
+
+fn validate_provider_endpoint(provider: &str, endpoint: &str) -> Result<(), String> {
+    let provider = provider_key(provider);
+    let normalized = normalize_endpoint(&provider, endpoint);
+    let actual = reqwest::Url::parse(&normalized)
+        .map_err(|error| format!("Endpoint 不是合法 URL：{error}"))?;
+    let expected = reqwest::Url::parse(default_endpoint_for_provider(&provider))
+        .map_err(|error| format!("内置 Endpoint 配置错误：{error}"))?;
+
+    let same_endpoint = actual.scheme() == "https"
+        && actual.username().is_empty()
+        && actual.password().is_none()
+        && actual.host_str() == expected.host_str()
+        && actual.port_or_known_default() == Some(443)
+        && actual.path().trim_end_matches('/') == expected.path().trim_end_matches('/')
+        && actual.query().is_none()
+        && actual.fragment().is_none();
+
+    if same_endpoint {
+        Ok(())
     } else {
-        Ok(host.to_string())
+        Err(format!(
+            "{} 仅允许使用官方 HTTPS Endpoint：{}",
+            provider_label(&provider),
+            default_endpoint_for_provider(&provider)
+        ))
     }
+}
+
+pub(crate) fn provider_http_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|error| format!("无法初始化安全 HTTP 客户端：{error}"))
 }
 
 fn normalize_config(mut config: CloudConfig) -> CloudConfig {
@@ -226,15 +312,50 @@ fn read_saved_configs(app: &tauri::AppHandle) -> Result<Vec<CloudConfig>, String
     let value = serde_json::from_str::<Value>(&content)
         .map_err(|err| format!("配置文件格式错误：{err}"))?;
 
-    if value.get("configs").is_some() {
+    let mut configs = if value.get("configs").is_some() {
         let store = serde_json::from_value::<ConfigStore>(value)
             .map_err(|err| format!("配置文件格式错误：{err}"))?;
-        Ok(store.configs.into_iter().map(normalize_config).collect())
+        store.configs
     } else {
         let config = serde_json::from_str::<CloudConfig>(&content)
             .map_err(|err| format!("配置文件格式错误：{err}"))?;
-        Ok(vec![normalize_config(config)])
+        vec![config]
+    };
+
+    configs = configs.into_iter().map(normalize_config).collect();
+    let original_count = configs.len();
+    configs.retain(|config| provider_key(&config.provider) != PROVIDER_ALIYUN);
+    let mut metadata_changed = configs.len() != original_count;
+    for config in &mut configs {
+        if validate_provider_endpoint(&config.provider, &config.endpoint).is_err() {
+            config.endpoint = default_endpoint_for_provider(&config.provider).to_string();
+            metadata_changed = true;
+        }
     }
+    let has_legacy_plaintext = configs
+        .iter()
+        .any(|config| !config.secret_key.trim().is_empty());
+
+    if has_legacy_plaintext {
+        for config in &configs {
+            if !config.secret_key.trim().is_empty() {
+                let account = credential_account(app, &config.provider)?;
+                credential_store::save(&account, &config.secret_key)?;
+            }
+        }
+        metadata_changed = true;
+    }
+
+    if metadata_changed {
+        write_saved_configs(app, configs.clone())?;
+    }
+
+    for config in &mut configs {
+        let account = credential_account(app, &config.provider)?;
+        config.secret_key = credential_store::load(&account)?.unwrap_or_default();
+    }
+
+    Ok(configs)
 }
 
 fn write_saved_configs(app: &tauri::AppHandle, configs: Vec<CloudConfig>) -> Result<(), String> {
@@ -253,7 +374,49 @@ fn write_saved_configs(app: &tauri::AppHandle, configs: Vec<CloudConfig>) -> Res
     let path = config_path(app)?;
     let content = serde_json::to_string_pretty(&ConfigStore { configs: deduped })
         .map_err(|err| format!("配置序列化失败：{err}"))?;
-    fs::write(&path, content).map_err(|err| format!("无法写入配置文件：{err}"))
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| format!("系统时间无效：{error}"))?
+        .as_nanos();
+    let temp_path = path.with_extension(format!("json.tmp.{}.{nonce}", std::process::id()));
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+
+    let mut temp_file = options
+        .open(&temp_path)
+        .map_err(|err| format!("无法安全创建临时配置文件：{err}"))?;
+    temp_file
+        .write_all(content.as_bytes())
+        .and_then(|_| temp_file.sync_all())
+        .map_err(|err| format!("无法写入临时配置文件：{err}"))?;
+    drop(temp_file);
+
+    if let Err(rename_error) = fs::rename(&temp_path, &path) {
+        if !cfg!(windows) || !path.exists() {
+            return Err(format!("无法保存配置文件：{rename_error}"));
+        }
+
+        let backup_path = path.with_extension(format!("json.bak.{}", std::process::id()));
+        fs::rename(&path, &backup_path).map_err(|error| format!("无法备份旧配置文件：{error}"))?;
+        if let Err(error) = fs::rename(&temp_path, &path) {
+            fs::rename(&backup_path, &path).map_err(|restore_error| {
+                format!(
+                    "配置替换失败：{error}；旧配置恢复也失败：{restore_error}；备份位于 {}",
+                    backup_path.display()
+                )
+            })?;
+            return Err(format!("配置替换失败，已恢复旧配置：{error}"));
+        }
+        let _ = fs::remove_file(backup_path);
+    }
+
+    Ok(())
 }
 
 fn read_required_config(app: &tauri::AppHandle, provider: &str) -> Result<CloudConfig, String> {
@@ -268,6 +431,7 @@ fn read_required_config(app: &tauri::AppHandle, provider: &str) -> Result<CloudC
 
 fn validate_config(config: &CloudConfig) -> Result<(), String> {
     let provider = provider_key(&config.provider);
+    validate_provider_endpoint(&provider, &config.endpoint)?;
     match provider.as_str() {
         PROVIDER_CLOUDFLARE => {
             if config.secret_key.trim().is_empty() {
@@ -304,7 +468,6 @@ fn to_public_config(config: CloudConfig) -> PublicConfig {
     PublicConfig {
         provider: provider_key(&config.provider),
         secret_id: config.secret_id,
-        secret_key: config.secret_key.clone(),
         secret_key_saved: !config.secret_key.trim().is_empty(),
         endpoint: config.endpoint,
         region: config.region,
@@ -325,7 +488,7 @@ fn hmac_sha256(key: &[u8], message: &str) -> Result<Vec<u8>, String> {
 }
 
 fn utc_date(timestamp: u64) -> Result<String, String> {
-    let format = format_description::parse("[year]-[month]-[day]")
+    let format = format_description::parse_borrowed::<3>("[year]-[month]-[day]")
         .map_err(|err| format!("日期格式初始化失败：{err}"))?;
     OffsetDateTime::from_unix_timestamp(timestamp as i64)
         .map_err(|err| format!("系统时间无效：{err}"))?
@@ -379,7 +542,7 @@ async fn call_dnspod_with_config(
         .as_secs();
     let authorization = sign_request(config, &host, action, &payload_text, timestamp)?;
 
-    let client = reqwest::Client::new();
+    let client = provider_http_client()?;
     let mut request = client
         .post(endpoint)
         .header("Authorization", authorization)
@@ -432,7 +595,7 @@ async fn call_cloudflare_with_config(
 ) -> Result<Value, String> {
     let endpoint = normalize_endpoint(&config.provider, &config.endpoint);
     let url = format!("{}{}", endpoint.trim_end_matches('/'), path);
-    let client = reqwest::Client::new();
+    let client = provider_http_client()?;
     let mut request = client
         .request(method, url)
         .bearer_auth(config.secret_key.trim())
@@ -537,6 +700,106 @@ fn domain_summaries(response: &Value) -> Vec<DomainSummary> {
         .unwrap_or_default()
 }
 
+async fn dnspod_domains(
+    config: &CloudConfig,
+) -> Result<(Vec<DomainSummary>, Option<String>), String> {
+    let mut pager = OffsetPager::default();
+    let mut domains = Vec::new();
+    let mut total = None;
+    let mut latest_request_id = None;
+
+    loop {
+        let response = call_dnspod_with_config(
+            config,
+            "DescribeDomainList",
+            json!({
+                "Type": "ALL",
+                "Offset": pager.offset(),
+                "Limit": DNSPOD_PAGE_SIZE
+            }),
+        )
+        .await?;
+
+        latest_request_id = request_id(&response).or(latest_request_id);
+        total = response
+            .get("DomainCountInfo")
+            .and_then(|value| value.get("AllTotal"))
+            .and_then(Value::as_u64)
+            .or(total);
+        let page = domain_summaries(&response);
+        let has_next = pager.advance(page.len(), total, "DNSPod 域名")?;
+        domains.extend(page);
+        if !has_next {
+            break;
+        }
+    }
+
+    Ok((domains, latest_request_id))
+}
+
+fn dnspod_record_summaries(response: &Value) -> Vec<DnsRecord> {
+    response
+        .get("RecordList")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| DnsRecord {
+                    record_id: value_as_id_string(item, "RecordId"),
+                    name: value_as_string(item, "Name"),
+                    record_type: value_as_string(item, "Type"),
+                    line: value_as_string(item, "Line"),
+                    line_id: value_as_string(item, "LineId"),
+                    value: value_as_string(item, "Value"),
+                    ttl: value_as_u64(item, "TTL"),
+                    mx: value_as_u64(item, "MX"),
+                    status: value_as_string(item, "Status"),
+                    updated_on: value_as_string(item, "UpdatedOn"),
+                    remark: value_as_string(item, "Remark"),
+                    default_ns: item
+                        .get("DefaultNS")
+                        .and_then(Value::as_bool)
+                        .unwrap_or_default(),
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+async fn dnspod_records(config: &CloudConfig, domain: &str) -> Result<Vec<DnsRecord>, String> {
+    let mut pager = OffsetPager::default();
+    let mut records = Vec::new();
+    let mut total = None;
+
+    loop {
+        let response = call_dnspod_with_config(
+            config,
+            "DescribeRecordList",
+            json!({
+                "Domain": domain,
+                "Offset": pager.offset(),
+                "Limit": DNSPOD_PAGE_SIZE,
+                "ErrorOnEmpty": "no"
+            }),
+        )
+        .await?;
+
+        total = response
+            .get("RecordCountInfo")
+            .and_then(|value| value.get("TotalCount"))
+            .and_then(Value::as_u64)
+            .or(total);
+        let page = dnspod_record_summaries(&response);
+        let has_next = pager.advance(page.len(), total, "DNSPod 解析记录")?;
+        records.extend(page);
+        if !has_next {
+            break;
+        }
+    }
+
+    Ok(records)
+}
+
 fn cloudflare_domain_summaries(zones: &[Value]) -> Vec<DomainSummary> {
     zones
         .iter()
@@ -560,32 +823,117 @@ fn cloudflare_domain_summaries(zones: &[Value]) -> Vec<DomainSummary> {
 
 async fn cloudflare_zones(config: &CloudConfig) -> Result<Vec<Value>, String> {
     let mut zones = Vec::new();
-    let mut page = 1_u64;
+    let mut pager = PageNumberPager::default();
+    let mut total_pages = None;
+    let mut total_items = None;
 
     loop {
         let response = call_cloudflare_with_config(
             config,
             Method::GET,
-            &format!("/zones?per_page=100&page={page}"),
+            &format!(
+                "/zones?per_page={CLOUDFLARE_ZONE_PAGE_SIZE}&page={}",
+                pager.page()
+            ),
             None,
         )
         .await?;
-        if let Some(items) = response.get("result").and_then(Value::as_array) {
-            zones.extend(items.iter().cloned());
-        }
-
-        let total_pages = response
-            .get("result_info")
+        let result_info = response.get("result_info");
+        total_pages = result_info
             .and_then(|value| value.get("total_pages"))
             .and_then(Value::as_u64)
-            .unwrap_or(1);
-        if page >= total_pages || page >= 50 {
+            .or(total_pages);
+        total_items = result_info
+            .and_then(|value| value.get("total_count"))
+            .and_then(Value::as_u64)
+            .or(total_items);
+        let page = response
+            .get("result")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let has_next = pager.advance(page.len(), total_pages, total_items, "Cloudflare 域名")?;
+        zones.extend(page);
+        if !has_next {
             break;
         }
-        page += 1;
     }
 
     Ok(zones)
+}
+
+fn cloudflare_record_summaries(response: &Value, domain: &str) -> Vec<DnsRecord> {
+    response
+        .get("result")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| {
+                    let proxied = item
+                        .get("proxied")
+                        .and_then(Value::as_bool)
+                        .unwrap_or_default();
+                    DnsRecord {
+                        record_id: value_as_id_string(item, "id"),
+                        name: relative_record_name(&value_as_string(item, "name"), domain),
+                        record_type: value_as_string(item, "type"),
+                        line: if proxied { "Proxied" } else { "DNS only" }.to_string(),
+                        line_id: String::new(),
+                        value: value_as_string(item, "content"),
+                        ttl: value_as_u64(item, "ttl"),
+                        mx: value_as_u64(item, "priority"),
+                        status: DEFAULT_STATUS.to_string(),
+                        updated_on: value_as_string(item, "modified_on"),
+                        remark: value_as_string(item, "comment"),
+                        default_ns: false,
+                    }
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+async fn cloudflare_records(
+    config: &CloudConfig,
+    zone_id: &str,
+    domain: &str,
+) -> Result<Vec<DnsRecord>, String> {
+    let mut pager = PageNumberPager::default();
+    let mut records = Vec::new();
+    let mut total_pages = None;
+    let mut total_items = None;
+
+    loop {
+        let response = call_cloudflare_with_config(
+            config,
+            Method::GET,
+            &format!(
+                "/zones/{zone_id}/dns_records?per_page={CLOUDFLARE_RECORD_PAGE_SIZE}&page={}",
+                pager.page()
+            ),
+            None,
+        )
+        .await?;
+        let result_info = response.get("result_info");
+        total_pages = result_info
+            .and_then(|value| value.get("total_pages"))
+            .and_then(Value::as_u64)
+            .or(total_pages);
+        total_items = result_info
+            .and_then(|value| value.get("total_count"))
+            .and_then(Value::as_u64)
+            .or(total_items);
+        let page = cloudflare_record_summaries(&response, domain);
+        let has_next =
+            pager.advance(page.len(), total_pages, total_items, "Cloudflare 解析记录")?;
+        records.extend(page);
+        if !has_next {
+            break;
+        }
+    }
+
+    Ok(records)
 }
 
 async fn cloudflare_zone_id(config: &CloudConfig, domain: &str) -> Result<String, String> {
@@ -738,28 +1086,14 @@ async fn verify_with_config(config: &CloudConfig) -> Result<VerifyResult, String
         PROVIDER_VOLCENGINE => providers::volcengine::verify(config).await,
         PROVIDER_ALIYUN => Err("阿里云配置已保存，但 DNS API 接入还在预留中".to_string()),
         _ => {
-            let response = call_dnspod_with_config(
-                config,
-                "DescribeDomainList",
-                json!({
-                    "Type": "ALL",
-                    "Offset": 0,
-                    "Limit": 3000
-                }),
-            )
-            .await?;
-
-            let domain_count = response
-                .get("DomainCountInfo")
-                .and_then(|value| value.get("AllTotal"))
-                .and_then(Value::as_u64);
+            let (domains, request_id) = dnspod_domains(config).await?;
 
             Ok(VerifyResult {
                 ok: true,
                 message: "腾讯云 DNSPod 连接成功，凭证和权限可用".to_string(),
-                request_id: request_id(&response),
-                domain_count,
-                domains: domain_summaries(&response),
+                request_id,
+                domain_count: Some(domains.len() as u64),
+                domains,
             })
         }
     }
@@ -777,20 +1111,29 @@ fn load_config(app: tauri::AppHandle) -> Result<Option<PublicConfig>, String> {
 
 #[tauri::command]
 fn save_config(app: tauri::AppHandle, config: SaveConfig) -> Result<PublicConfig, String> {
-    let mut configs = read_saved_configs(&app)?;
     let provider = provider_key(&config.provider);
+    if provider == PROVIDER_ALIYUN {
+        return Err("阿里云 DNS 尚未接入，当前版本不会保存其访问凭证".to_string());
+    }
+
+    let mut configs = read_saved_configs(&app)?;
     let existing = configs
         .iter()
         .find(|item| provider_key(&item.provider) == provider)
         .cloned();
+    let previous_secret = existing
+        .as_ref()
+        .map(|item| item.secret_key.clone())
+        .unwrap_or_default();
     let secret_id = config.secret_id.trim().to_string();
-    let secret_key = if config.secret_key.trim().is_empty() {
+    let submitted_secret = config.secret_key.trim().to_string();
+    let secret_key = if submitted_secret.is_empty() {
         existing
             .as_ref()
             .map(|item| item.secret_key.clone())
             .unwrap_or_default()
     } else {
-        config.secret_key.trim().to_string()
+        submitted_secret.clone()
     };
 
     let stored = CloudConfig {
@@ -803,9 +1146,32 @@ fn save_config(app: tauri::AppHandle, config: SaveConfig) -> Result<PublicConfig
     endpoint_host(&stored.endpoint)?;
     validate_config(&stored)?;
 
+    let changed_account = if !submitted_secret.is_empty() {
+        let account = credential_account(&app, &provider)?;
+        credential_store::save(&account, &submitted_secret)?;
+        Some(account)
+    } else {
+        None
+    };
+
     configs.retain(|item| provider_key(&item.provider) != provider);
     configs.push(stored.clone());
-    write_saved_configs(&app, configs)?;
+    if let Err(metadata_error) = write_saved_configs(&app, configs) {
+        if let Some(account) = changed_account {
+            let rollback_result = if previous_secret.is_empty() {
+                credential_store::delete(&account)
+            } else {
+                credential_store::save(&account, &previous_secret)
+            };
+            return match rollback_result {
+                Ok(()) => Err(format!("{metadata_error}；系统凭证库已恢复原值")),
+                Err(rollback_error) => Err(format!(
+                    "{metadata_error}；系统凭证库回滚失败：{rollback_error}"
+                )),
+            };
+        }
+        return Err(metadata_error);
+    }
 
     Ok(to_public_config(stored))
 }
@@ -826,7 +1192,8 @@ async fn verify_all_configs(app: tauri::AppHandle) -> Result<VerifyResult, Strin
     let mut domains = Vec::new();
     let mut failures = Vec::new();
     for config in configs {
-        if validate_config(&config).is_err() {
+        if let Err(error) = validate_config(&config) {
+            failures.push(format!("{}: {error}", provider_label(&config.provider)));
             continue;
         }
         match verify_with_config(&config).await {
@@ -874,88 +1241,11 @@ async fn list_records(
     match provider.as_str() {
         PROVIDER_CLOUDFLARE => {
             let zone_id = cloudflare_zone_id(&config, &domain).await?;
-            let response = call_cloudflare_with_config(
-                &config,
-                Method::GET,
-                &format!("/zones/{zone_id}/dns_records?per_page=5000"),
-                None,
-            )
-            .await?;
-            let records = response
-                .get("result")
-                .and_then(Value::as_array)
-                .map(|items| {
-                    items
-                        .iter()
-                        .map(|item| {
-                            let proxied = item
-                                .get("proxied")
-                                .and_then(Value::as_bool)
-                                .unwrap_or_default();
-                            DnsRecord {
-                                record_id: value_as_id_string(item, "id"),
-                                name: relative_record_name(&value_as_string(item, "name"), &domain),
-                                record_type: value_as_string(item, "type"),
-                                line: if proxied { "Proxied" } else { "DNS only" }.to_string(),
-                                line_id: String::new(),
-                                value: value_as_string(item, "content"),
-                                ttl: value_as_u64(item, "ttl"),
-                                mx: value_as_u64(item, "priority"),
-                                status: DEFAULT_STATUS.to_string(),
-                                updated_on: value_as_string(item, "modified_on"),
-                                remark: value_as_string(item, "comment"),
-                                default_ns: false,
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            Ok(records)
+            cloudflare_records(&config, &zone_id, &domain).await
         }
         PROVIDER_VOLCENGINE => providers::volcengine::list_records(&config, &domain).await,
         PROVIDER_ALIYUN => Err("阿里云 DNS 记录管理还在预留中".to_string()),
-        _ => {
-            let response = call_dnspod_with_config(
-                &config,
-                "DescribeRecordList",
-                json!({
-                    "Domain": domain,
-                    "Offset": 0,
-                    "Limit": 3000,
-                    "ErrorOnEmpty": "no"
-                }),
-            )
-            .await?;
-
-            let records = response
-                .get("RecordList")
-                .and_then(Value::as_array)
-                .map(|items| {
-                    items
-                        .iter()
-                        .map(|item| DnsRecord {
-                            record_id: value_as_id_string(item, "RecordId"),
-                            name: value_as_string(item, "Name"),
-                            record_type: value_as_string(item, "Type"),
-                            line: value_as_string(item, "Line"),
-                            line_id: value_as_string(item, "LineId"),
-                            value: value_as_string(item, "Value"),
-                            ttl: value_as_u64(item, "TTL"),
-                            mx: value_as_u64(item, "MX"),
-                            status: value_as_string(item, "Status"),
-                            updated_on: value_as_string(item, "UpdatedOn"),
-                            remark: value_as_string(item, "Remark"),
-                            default_ns: item
-                                .get("DefaultNS")
-                                .and_then(Value::as_bool)
-                                .unwrap_or_default(),
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-
-            Ok(records)
-        }
+        _ => dnspod_records(&config, &domain).await,
     }
 }
 
@@ -1117,7 +1407,9 @@ async fn delete_record(
                 record_id: Some(record_id),
             })
         }
-        PROVIDER_VOLCENGINE => providers::volcengine::delete_record(&config, &record_id).await,
+        PROVIDER_VOLCENGINE => {
+            providers::volcengine::delete_record(&config, domain.trim(), &record_id).await
+        }
         PROVIDER_ALIYUN => Err("阿里云 DNS 记录管理还在预留中".to_string()),
         _ => {
             let record_id_number = parse_dnspod_record_id(&record_id)?;
@@ -1144,7 +1436,6 @@ async fn delete_record(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             load_config,
             load_configs,
@@ -1158,4 +1449,47 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod config_security_tests {
+    use super::*;
+
+    fn config(provider: &str, endpoint: &str) -> CloudConfig {
+        CloudConfig {
+            provider: provider.to_string(),
+            secret_id: "public-id".to_string(),
+            secret_key: "top-secret".to_string(),
+            endpoint: endpoint.to_string(),
+            region: String::new(),
+        }
+    }
+
+    #[test]
+    fn accepts_only_the_official_https_endpoint() {
+        assert!(
+            validate_provider_endpoint(PROVIDER_CLOUDFLARE, DEFAULT_CLOUDFLARE_ENDPOINT).is_ok()
+        );
+        assert!(validate_provider_endpoint(
+            PROVIDER_CLOUDFLARE,
+            "http://api.cloudflare.com/client/v4"
+        )
+        .is_err());
+        assert!(
+            validate_provider_endpoint(PROVIDER_CLOUDFLARE, "https://example.com/client/v4")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn serialized_metadata_never_contains_the_secret() {
+        let content = serde_json::to_string(&ConfigStore {
+            configs: vec![config(PROVIDER_TENCENT, DEFAULT_TENCENT_ENDPOINT)],
+        })
+        .unwrap();
+
+        assert!(!content.contains("top-secret"));
+        assert!(!content.contains("secretKey"));
+        assert!(content.contains("public-id"));
+    }
 }

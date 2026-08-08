@@ -589,6 +589,11 @@ select.table-control {
   border-color: #cbd7cf;
 }
 
+.provider-tab:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .provider-tab.active {
   background: #e8f4ee;
   border-color: #66a589;

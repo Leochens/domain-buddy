@@ -1,297 +1,35 @@
 import { useEffect, useMemo, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
-
-type ProviderKey = "tencent" | "cloudflare" | "aliyun" | "volcengine";
-
-type PublicConfig = {
-  provider: ProviderKey;
-  secretId: string;
-  secretKey: string;
-  secretKeySaved: boolean;
-  endpoint: string;
-  region: string;
-};
-
-type VerifyResult = {
-  ok: boolean;
-  message: string;
-  requestId?: string;
-  domainCount?: number;
-  domains: DomainSummary[];
-};
-
-type DomainSummary = {
-  domainId: string;
-  provider: ProviderKey;
-  providerLabel: string;
-  name: string;
-  status: string;
-  dnsStatus: string;
-  gradeTitle: string;
-  recordCount: number;
-  remark: string;
-  updatedOn: string;
-};
-
-type DnsRecord = {
-  recordId: string;
-  name: string;
-  recordType: string;
-  line: string;
-  lineId: string;
-  value: string;
-  ttl: number;
-  mx: number;
-  status: string;
-  updatedOn: string;
-  remark: string;
-  defaultNs: boolean;
-};
-
-type RecordForm = {
-  recordId?: string;
-  subDomain: string;
-  recordType: string;
-  recordLine: string;
-  value: string;
-  ttl: string;
-  mx: string;
-  status: "ENABLE" | "DISABLE";
-  remark: string;
-};
-
-type ProviderOption = {
-  value: ProviderKey;
-  label: string;
-  shortLabel: string;
-  status: string;
-  endpoint: string;
-  secretIdLabel: string;
-  secretIdPlaceholder: string;
-  secretKeyLabel: string;
-  secretKeyPlaceholder: string;
-  regionLabel: string;
-  regionPlaceholder: string;
-};
-
-const providerOptions: ProviderOption[] = [
-  {
-    value: "tencent",
-    label: "腾讯云 DNSPod",
-    shortLabel: "DNSPod",
-    status: "已支持",
-    endpoint: "https://dnspod.tencentcloudapi.com",
-    secretIdLabel: "SecretId",
-    secretIdPlaceholder: "AKID...",
-    secretKeyLabel: "SecretKey",
-    secretKeyPlaceholder: "创建时展示一次的 SecretKey",
-    regionLabel: "Region",
-    regionPlaceholder: "通常可留空",
-  },
-  {
-    value: "cloudflare",
-    label: "Cloudflare",
-    shortLabel: "Cloudflare",
-    status: "已支持",
-    endpoint: "https://api.cloudflare.com/client/v4",
-    secretIdLabel: "Account ID",
-    secretIdPlaceholder: "可选，留空也可以",
-    secretKeyLabel: "API Token",
-    secretKeyPlaceholder: "需要 Zone Read / DNS Edit 权限",
-    regionLabel: "Region",
-    regionPlaceholder: "Cloudflare 可留空",
-  },
-  {
-    value: "volcengine",
-    label: "火山引擎 DNS",
-    shortLabel: "Volc",
-    status: "已支持",
-    endpoint: "https://dns.volcengineapi.com",
-    secretIdLabel: "AccessKeyId",
-    secretIdPlaceholder: "AKLT...",
-    secretKeyLabel: "SecretAccessKey",
-    secretKeyPlaceholder: "火山引擎访问密钥",
-    regionLabel: "Region",
-    regionPlaceholder: "默认 cn-beijing",
-  },
-  {
-    value: "aliyun",
-    label: "阿里云 DNS",
-    shortLabel: "Aliyun",
-    status: "配置预留",
-    endpoint: "https://alidns.aliyuncs.com",
-    secretIdLabel: "AccessKeyId",
-    secretIdPlaceholder: "LTAI...",
-    secretKeyLabel: "AccessKeySecret",
-    secretKeyPlaceholder: "阿里云访问密钥",
-    regionLabel: "Region",
-    regionPlaceholder: "例如 cn-hangzhou",
-  },
-];
-
-const recordTypes = ["A", "AAAA", "CNAME", "TXT", "MX", "NS", "CAA", "SRV", "HTTPS", "SVCB"];
-const emptyRecordForm: RecordForm = {
-  subDomain: "www",
-  recordType: "A",
-  recordLine: "默认",
-  value: "",
-  ttl: "600",
-  mx: "0",
-  status: "ENABLE",
-  remark: "",
-};
-
-function providerMeta(provider: ProviderKey) {
-  return providerOptions.find((item) => item.value === provider) || providerOptions[0];
-}
-
-function domainKey(domain: DomainSummary) {
-  return `${domain.provider}:${domain.domainId || domain.name}`;
-}
-
-function toMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function isTauriRuntime() {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
-
-async function invokeCommand<T>(command: string, args?: Record<string, unknown>) {
-  if (!isTauriRuntime()) {
-    throw new Error("浏览器预览模式不能调用供应商 API，请使用 Tauri 桌面应用。");
-  }
-  return invoke<T>(command, args);
-}
-
-function recordToForm(record: DnsRecord): RecordForm {
-  return {
-    recordId: record.recordId,
-    subDomain: record.name || "@",
-    recordType: record.recordType || "A",
-    recordLine: record.line || "默认",
-    value: record.value,
-    ttl: String(record.ttl || 600),
-    mx: String(record.mx || 0),
-    status: record.status === "DISABLE" ? "DISABLE" : "ENABLE",
-    remark: record.remark || "",
-  };
-}
-
-function draftsFromRecords(records: DnsRecord[]) {
-  return records.reduce<Record<string, RecordForm>>((nextDrafts, record) => {
-    nextDrafts[record.recordId] = recordToForm(record);
-    return nextDrafts;
-  }, {});
-}
-
-function hasRecordChanges(record: DnsRecord, draft: RecordForm) {
-  const original = recordToForm(record);
-  return (
-    original.subDomain !== draft.subDomain.trim() ||
-    original.recordType !== draft.recordType ||
-    original.recordLine !== draft.recordLine.trim() ||
-    original.value !== draft.value.trim() ||
-    original.ttl !== draft.ttl.trim() ||
-    original.mx !== draft.mx.trim() ||
-    original.status !== draft.status ||
-    original.remark !== draft.remark.trim()
-  );
-}
-
-function recordTitle(record: DnsRecord, domain: string) {
-  return record.name === "@" ? domain : `${record.name}.${domain}`;
-}
-
-function RefreshIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <path d="M20 6v5h-5" />
-      <path d="M4 18v-5h5" />
-      <path d="M18.8 9A7 7 0 0 0 6.3 6.2L4 8.5" />
-      <path d="M5.2 15A7 7 0 0 0 17.7 17.8L20 15.5" />
-    </svg>
-  );
-}
-
-function EyeIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z" />
-      <circle cx="12" cy="12" r="3" />
-    </svg>
-  );
-}
-
-function EyeOffIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <path d="M3 3l18 18" />
-      <path d="M10.6 10.6A2 2 0 0 0 12 14a2 2 0 0 0 1.4-.6" />
-      <path d="M9.8 5.2A10.7 10.7 0 0 1 12 5c6.5 0 10 7 10 7a17.8 17.8 0 0 1-3 4.2" />
-      <path d="M6.6 6.6C3.7 8.5 2 12 2 12s3.5 7 10 7a10.8 10.8 0 0 0 4.1-.8" />
-    </svg>
-  );
-}
-
-function SettingsIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z" />
-      <path d="M19.4 15a1.8 1.8 0 0 0 .4 2l.1.1a2 2 0 0 1-2.8 2.8l-.1-.1a1.8 1.8 0 0 0-2-.4 1.8 1.8 0 0 0-1.1 1.7V21a2 2 0 0 1-4 0v-.2a1.8 1.8 0 0 0-1.2-1.7 1.8 1.8 0 0 0-2 .4l-.1.1A2 2 0 0 1 3.8 17l.1-.1a1.8 1.8 0 0 0 .4-2 1.8 1.8 0 0 0-1.7-1.1H2.5a2 2 0 0 1 0-4h.2A1.8 1.8 0 0 0 4.3 8a1.8 1.8 0 0 0-.4-2l-.1-.1A2 2 0 1 1 6.6 3l.1.1a1.8 1.8 0 0 0 2 .4A1.8 1.8 0 0 0 9.8 2h.4a2 2 0 0 1 4 0v.2a1.8 1.8 0 0 0 1.1 1.7 1.8 1.8 0 0 0 2-.4l.1-.1A2 2 0 1 1 20.2 6l-.1.1a1.8 1.8 0 0 0-.4 2 1.8 1.8 0 0 0 1.7 1.1h.1a2 2 0 0 1 0 4h-.2a1.8 1.8 0 0 0-1.9 1.8Z" />
-    </svg>
-  );
-}
-
-function PlusIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <path d="M12 5v14" />
-      <path d="M5 12h14" />
-    </svg>
-  );
-}
-
-function SaveIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z" />
-      <path d="M17 21v-8H7v8" />
-      <path d="M7 3v5h8" />
-    </svg>
-  );
-}
-
-function UndoIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <path d="M9 14 4 9l5-5" />
-      <path d="M4 9h10a6 6 0 0 1 0 12h-3" />
-    </svg>
-  );
-}
-
-function TrashIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <path d="M3 6h18" />
-      <path d="M8 6V4h8v2" />
-      <path d="m6 6 1 15h10l1-15" />
-      <path d="M10 11v6" />
-      <path d="M14 11v6" />
-    </svg>
-  );
-}
-
-function CloseIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <path d="m6 6 12 12" />
-      <path d="M18 6 6 18" />
-    </svg>
-  );
-}
+import {
+  CloseIcon,
+  EyeIcon,
+  EyeOffIcon,
+  PlusIcon,
+  RefreshIcon,
+  SaveIcon,
+  SettingsIcon,
+  TrashIcon,
+  UndoIcon,
+} from "./icons";
+import { providerMeta, providerOptions } from "./provider-options";
+import {
+  domainKey,
+  draftsFromRecords,
+  emptyRecordForm,
+  hasRecordChanges,
+  recordTitle,
+  recordToForm,
+  recordTypes,
+} from "./record-utils";
+import { invokeCommand, isTauriRuntime, toMessage } from "./tauri-runtime";
+import type {
+  DnsRecord,
+  DomainSummary,
+  ProviderKey,
+  PublicConfig,
+  RecordForm,
+  VerifyResult,
+} from "./types";
 
 function App() {
   const [configs, setConfigs] = useState<PublicConfig[]>([]);
@@ -360,7 +98,7 @@ function App() {
     const meta = providerMeta(provider);
     setConfigProvider(provider);
     setSecretId(existing?.secretId || "");
-    setSecretKey(existing?.secretKey || "");
+    setSecretKey("");
     setSecretKeySaved(Boolean(existing?.secretKeySaved));
     setSecretVisible(false);
     setEndpoint(existing?.endpoint || meta.endpoint);
@@ -846,11 +584,14 @@ function App() {
             <div className="provider-tabs">
               {providerOptions.map((item) => {
                 const saved = Boolean(configForProvider(item.value));
+                const enabled = item.value !== "aliyun";
                 return (
                   <button
                     key={item.value}
                     className={configProvider === item.value ? "provider-tab active" : "provider-tab"}
                     onClick={() => applyConfigToForm(item.value)}
+                    disabled={!enabled}
+                    title={enabled ? item.label : "尚未接入，当前版本不会收集或保存阿里云凭证"}
                   >
                     <strong>{item.shortLabel}</strong>
                     <span>{saved ? "已保存" : item.status}</span>
@@ -891,11 +632,11 @@ function App() {
                 </div>
               </label>
               <label>
-                API Endpoint
+                API Endpoint（官方固定地址）
                 <input
                   value={endpoint}
-                  onChange={(event) => setEndpoint(event.currentTarget.value)}
                   placeholder={configFormProvider.endpoint}
+                  readOnly
                   spellCheck={false}
                 />
               </label>

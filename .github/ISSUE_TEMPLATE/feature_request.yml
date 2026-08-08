@@ -1,0 +1,48 @@
+name: 功能建议
+description: 建议新能力或体验改进
+title: "[Feature] "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 想解决的问题
+      description: 请先描述场景和阻碍，而不只是某个界面控件。
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: 建议方案
+      description: 说明预期流程、供应商差异和安全边界。
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 考虑过的替代方案
+  - type: dropdown
+    id: scope
+    attributes:
+      label: 影响范围
+      multiple: true
+      options:
+        - 腾讯云 DNSPod
+        - Cloudflare
+        - 火山引擎 DNS
+        - 新供应商
+        - 通用界面
+        - 安全与凭证
+        - 构建与发布
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我已搜索现有 Issue，没有发现相同建议。
+          required: true
+        - label: 该建议不要求在仓库中保存真实凭证或用户数据。
+          required: true
