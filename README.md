@@ -26,9 +26,9 @@ Domain Buddy 是一个本地运行的跨平台 DNS 管理桌面应用。它把�
 
 ## 界面预览
 
-![Domain Buddy 空配置界面](assets/domain-buddy-preview.png)
+![Domain Buddy 解析记录管理界面](assets/domain-buddy-preview.png)
 
-截图使用浏览器预览模式生成，不包含真实账号、域名、解析记录或凭证。
+截图中的账号、域名和解析记录等敏感信息均已模糊处理。
 
 ## 安全设计
 
