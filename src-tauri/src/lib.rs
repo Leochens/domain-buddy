@@ -764,10 +764,25 @@ fn dnspod_record_summaries(response: &Value) -> Vec<DnsRecord> {
         .unwrap_or_default()
 }
 
+fn dnspod_record_page(
+    response: &Value,
+    pager: &mut OffsetPager,
+) -> Result<(Vec<DnsRecord>, bool), String> {
+    let total = response
+        .get("RecordCountInfo")
+        .and_then(|value| value.get("TotalCount"))
+        .and_then(Value::as_u64);
+    let page = dnspod_record_summaries(response);
+    // DNSPod may return a RecordList that is newer than its count metadata.
+    // Keep the actual list as the offset source and scan until an empty page.
+    let has_next = pager.advance_with_advisory_total(page.len(), total, "DNSPod 解析记录")?;
+
+    Ok((page, has_next))
+}
+
 async fn dnspod_records(config: &CloudConfig, domain: &str) -> Result<Vec<DnsRecord>, String> {
     let mut pager = OffsetPager::default();
     let mut records = Vec::new();
-    let mut total = None;
 
     loop {
         let response = call_dnspod_with_config(
@@ -782,13 +797,7 @@ async fn dnspod_records(config: &CloudConfig, domain: &str) -> Result<Vec<DnsRec
         )
         .await?;
 
-        total = response
-            .get("RecordCountInfo")
-            .and_then(|value| value.get("TotalCount"))
-            .and_then(Value::as_u64)
-            .or(total);
-        let page = dnspod_record_summaries(&response);
-        let has_next = pager.advance(page.len(), total, "DNSPod 解析记录")?;
+        let (page, has_next) = dnspod_record_page(&response, &mut pager)?;
         records.extend(page);
         if !has_next {
             break;
@@ -1487,5 +1496,41 @@ mod config_security_tests {
         assert!(!content.contains("top-secret"));
         assert!(!content.contains("secretKey"));
         assert!(content.contains("public-id"));
+    }
+}
+
+#[cfg(test)]
+mod dnspod_tests {
+    use super::*;
+
+    #[test]
+    fn dnspod_record_page_accepts_a_list_longer_than_stale_total_count() {
+        let response = json!({
+            "RecordCountInfo": { "ListCount": 6, "TotalCount": 5 },
+            "RecordList": [
+                { "RecordId": 1, "DefaultNS": false },
+                { "RecordId": 2, "DefaultNS": false },
+                { "RecordId": 3, "DefaultNS": false },
+                { "RecordId": 4, "DefaultNS": false },
+                { "RecordId": 5, "DefaultNS": false },
+                { "RecordId": 6, "DefaultNS": true }
+            ]
+        });
+        let mut pager = OffsetPager::default();
+
+        let (records, has_next) = dnspod_record_page(&response, &mut pager).unwrap();
+
+        assert_eq!(records.len(), 6);
+        assert!(has_next);
+        assert_eq!(pager.offset(), 6);
+
+        let empty_response = json!({
+            "RecordCountInfo": { "ListCount": 0, "TotalCount": 5 },
+            "RecordList": []
+        });
+        let (records, has_next) = dnspod_record_page(&empty_response, &mut pager).unwrap();
+
+        assert!(records.is_empty());
+        assert!(!has_next);
     }
 }

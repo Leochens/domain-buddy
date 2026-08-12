@@ -44,6 +44,24 @@ impl OffsetPager {
         self.offset = next_offset;
         Ok(total != Some(next_offset))
     }
+
+    pub(crate) fn advance_with_advisory_total(
+        &mut self,
+        received: usize,
+        total: Option<u64>,
+        resource: &str,
+    ) -> Result<bool, String> {
+        let next_offset = u64::try_from(received)
+            .ok()
+            .and_then(|received| self.offset.checked_add(received));
+        let reliable_total = total.filter(|total| {
+            next_offset
+                .map(|next_offset| *total >= next_offset)
+                .unwrap_or(true)
+        });
+
+        self.advance(received, reliable_total, resource)
+    }
 }
 
 #[derive(Debug)]
@@ -164,6 +182,19 @@ mod tests {
 
         let error = pager.advance(0, Some(5), "DNSPod 记录").unwrap_err();
         assert!(error.contains("分页提前结束"));
+    }
+
+    #[test]
+    fn offset_pager_can_continue_past_an_advisory_underreported_total() {
+        let mut pager = OffsetPager::default();
+
+        assert!(pager
+            .advance_with_advisory_total(6, Some(5), "DNSPod 解析记录")
+            .unwrap());
+        assert_eq!(pager.offset(), 6);
+        assert!(!pager
+            .advance_with_advisory_total(0, Some(5), "DNSPod 解析记录")
+            .unwrap());
     }
 
     #[test]
