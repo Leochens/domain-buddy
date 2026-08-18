@@ -1,6 +1,6 @@
 [package]
 name = "domain-buddy"
-version = "0.1.0"
+version = "0.1.1"
 description = "Local multi-provider DNS management desktop app"
 authors = ["Leochens"]
 edition = "2021"

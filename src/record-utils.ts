@@ -1,18 +1,5 @@
 import type { DnsRecord, DomainSummary, RecordForm } from "./types";
 
-export const recordTypes = [
-  "A",
-  "AAAA",
-  "CNAME",
-  "TXT",
-  "MX",
-  "NS",
-  "CAA",
-  "SRV",
-  "HTTPS",
-  "SVCB",
-];
-
 export const emptyRecordForm: RecordForm = {
   subDomain: "www",
   recordType: "A",
@@ -65,4 +52,24 @@ export function hasRecordChanges(record: DnsRecord, draft: RecordForm) {
 
 export function recordTitle(record: DnsRecord, domain: string) {
   return record.name === "@" ? domain : `${record.name}.${domain}`;
+}
+
+export function filterRecords(
+  records: DnsRecord[],
+  drafts: Record<string, RecordForm>,
+  query: string,
+  selectedType: string,
+) {
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+
+  return records.filter((record) => {
+    const draft = drafts[record.recordId] || recordToForm(record);
+    const matchesType = !selectedType || draft.recordType === selectedType;
+    const matchesQuery =
+      !normalizedQuery ||
+      draft.subDomain.toLocaleLowerCase().includes(normalizedQuery) ||
+      draft.value.toLocaleLowerCase().includes(normalizedQuery);
+
+    return matchesType && matchesQuery;
+  });
 }

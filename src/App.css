@@ -359,12 +359,13 @@ label {
   align-items: center;
   border-bottom: 1px solid #e7ece8;
   display: flex;
-  height: 48px;
+  gap: 16px;
   justify-content: space-between;
-  padding: 0 14px;
+  min-height: 58px;
+  padding: 9px 14px;
 }
 
-.table-header div {
+.table-summary {
   align-items: baseline;
   display: flex;
   gap: 10px;
@@ -384,6 +385,68 @@ label {
   font-size: 12px;
   font-style: normal;
   font-weight: 720;
+}
+
+.record-filters {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.record-search,
+.record-type-filter {
+  display: block;
+}
+
+.record-search {
+  width: min(250px, 24vw);
+}
+
+.record-search input,
+.record-type-filter select {
+  height: 34px;
+  padding-bottom: 6px;
+  padding-top: 6px;
+}
+
+.record-search input::-webkit-search-cancel-button {
+  cursor: pointer;
+}
+
+.record-type-filter {
+  width: 118px;
+}
+
+.clear-filters-button {
+  background: transparent;
+  border: 0;
+  color: #176247;
+  font-size: 12px;
+  font-weight: 780;
+  padding: 7px 2px;
+}
+
+.clear-filters-button:hover {
+  color: #0d513f;
+  text-decoration: underline;
+}
+
+.filter-result {
+  min-width: 58px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.visually-hidden {
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
 }
 
 .records-table {
@@ -539,7 +602,9 @@ select.table-control {
 }
 
 .compact-modal {
-  max-width: 620px;
+  max-height: calc(100vh - 40px);
+  max-width: 720px;
+  overflow-y: auto;
 }
 
 .modal-header {
@@ -617,6 +682,61 @@ select.table-control {
   grid-column: span 2;
 }
 
+.field-help {
+  color: #7a857e;
+  font-size: 11px;
+  font-weight: 550;
+  line-height: 1.45;
+}
+
+.record-type-guide {
+  background: #f4f8f5;
+  border: 1px solid #dce8e0;
+  border-radius: 8px;
+  color: #344139;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.6fr);
+  padding: 12px 14px;
+}
+
+.record-type-guide strong {
+  color: #176247;
+  font-size: 13px;
+}
+
+.record-type-guide p {
+  font-size: 12px;
+  font-weight: 550;
+  line-height: 1.55;
+  margin: 5px 0 0;
+}
+
+.record-type-guide dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.record-type-guide dt {
+  color: #6a756e;
+  font-size: 10px;
+  font-weight: 800;
+  margin-bottom: 2px;
+}
+
+.record-type-guide dd {
+  font-size: 11px;
+  font-weight: 550;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.record-type-guide code {
+  color: #176247;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
 .modal-footer {
   display: flex;
   gap: 9px;
@@ -630,5 +750,9 @@ select.table-control {
 
   table {
     min-width: 1120px;
+  }
+
+  .record-search {
+    width: 190px;
   }
 }

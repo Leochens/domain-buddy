@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import "./App.css";
+import { AddRecordModal } from "./AddRecordModal";
+import { RecordFilters } from "./RecordFilters";
 import {
   CloseIcon,
   EyeIcon,
@@ -12,14 +14,15 @@ import {
   UndoIcon,
 } from "./icons";
 import { providerMeta, providerOptions } from "./provider-options";
+import { recordTypes } from "./record-metadata";
 import {
   domainKey,
   draftsFromRecords,
   emptyRecordForm,
+  filterRecords,
   hasRecordChanges,
   recordTitle,
   recordToForm,
-  recordTypes,
 } from "./record-utils";
 import { invokeCommand, isTauriRuntime, toMessage } from "./tauri-runtime";
 import type {
@@ -45,6 +48,8 @@ function App() {
   const [records, setRecords] = useState<DnsRecord[]>([]);
   const [recordDrafts, setRecordDrafts] = useState<Record<string, RecordForm>>({});
   const [recordForm, setRecordForm] = useState<RecordForm>(emptyRecordForm);
+  const [recordSearch, setRecordSearch] = useState("");
+  const [recordTypeFilter, setRecordTypeFilter] = useState("");
   const [notice, setNotice] = useState("未连接供应商");
   const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -58,17 +63,21 @@ function App() {
   );
   const configFormProvider = providerMeta(configProvider);
   const activeProviderLabel = activeDomain?.providerLabel || `${configs.length} 个供应商`;
-  const weightFieldLabel = activeDomain?.provider === "volcengine" ? "权重" : "MX";
-  const recordLinePlaceholder =
-    activeDomain?.provider === "cloudflare"
-      ? "DNS only 或 Proxied"
-      : activeDomain?.provider === "volcengine"
-        ? "default"
-        : "默认";
   const recordValueOptions = useMemo(
     () => Array.from(new Set(records.map((record) => record.value).filter(Boolean))).sort(),
     [records],
   );
+  const recordTypeOptions = useMemo(() => {
+    const availableTypes = records.map(
+      (record) => recordDrafts[record.recordId]?.recordType || record.recordType,
+    );
+    return Array.from(new Set([...recordTypes, ...availableTypes].filter(Boolean)));
+  }, [recordDrafts, records]);
+  const visibleRecords = useMemo(
+    () => filterRecords(records, recordDrafts, recordSearch, recordTypeFilter),
+    [recordDrafts, recordSearch, recordTypeFilter, records],
+  );
+  const hasRecordFilters = Boolean(recordSearch.trim() || recordTypeFilter);
 
   useEffect(() => {
     if (!desktopReady) {
@@ -209,6 +218,7 @@ function App() {
       return;
     }
 
+    const switchingDomain = domainKey(target) !== activeDomainKey;
     setBusy("list");
     try {
       const nextRecords = await invokeCommand<DnsRecord[]>("list_records", {
@@ -219,12 +229,20 @@ function App() {
       setRecords(nextRecords);
       setRecordDrafts(draftsFromRecords(nextRecords));
       setRecordForm(emptyRecordForm);
+      if (switchingDomain) {
+        clearRecordFilters();
+      }
       setNotice(`${target.providerLabel} · ${target.name}：${nextRecords.length} 条记录`);
     } catch (error) {
       setNotice(toMessage(error));
     } finally {
       setBusy(null);
     }
+  }
+
+  function clearRecordFilters() {
+    setRecordSearch("");
+    setRecordTypeFilter("");
   }
 
   function updateDraft(recordId: string, patch: Partial<RecordForm>) {
@@ -396,11 +414,22 @@ function App() {
 
       <section className="records-panel">
         <div className="table-header">
-          <div>
+          <div className="table-summary">
             <strong>{activeDomain?.name || "解析记录"}</strong>
-            <span>{records.length} 条记录</span>
+            {activeDomain?.providerLabel && <em>{activeDomain.providerLabel}</em>}
           </div>
-          {activeDomain?.providerLabel && <em>{activeDomain.providerLabel}</em>}
+          {activeDomain && (
+            <RecordFilters
+              query={recordSearch}
+              selectedType={recordTypeFilter}
+              typeOptions={recordTypeOptions}
+              visibleCount={visibleRecords.length}
+              totalCount={records.length}
+              onQueryChange={setRecordSearch}
+              onTypeChange={setRecordTypeFilter}
+              onClear={clearRecordFilters}
+            />
+          )}
         </div>
 
         <datalist id="record-value-options">
@@ -424,7 +453,7 @@ function App() {
               </tr>
             </thead>
             <tbody>
-              {records.map((record) => {
+              {visibleRecords.map((record) => {
                 const draft = recordDrafts[record.recordId] || recordToForm(record);
                 const changed = hasRecordChanges(record, draft);
                 const locked = record.defaultNs || busy !== null || !desktopReady;
@@ -554,13 +583,25 @@ function App() {
             </tbody>
           </table>
 
-          {!records.length && (
+          {!visibleRecords.length && (
             <div className="empty-state">
-              <strong>{activeDomain ? "暂无解析记录" : "未选择域名"}</strong>
-              <button className="primary-button" onClick={() => setConfigOpen(true)}>
-                <SettingsIcon />
-                {configs.length ? "同步域名" : "配置"}
-              </button>
+              <strong>
+                {hasRecordFilters
+                  ? "没有符合条件的解析记录"
+                  : activeDomain
+                    ? "暂无解析记录"
+                    : "未选择域名"}
+              </strong>
+              {hasRecordFilters ? (
+                <button className="secondary-button" onClick={clearRecordFilters}>
+                  清除搜索和过滤
+                </button>
+              ) : (
+                <button className="primary-button" onClick={() => setConfigOpen(true)}>
+                  <SettingsIcon />
+                  {configs.length ? "同步域名" : "配置"}
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -665,126 +706,16 @@ function App() {
       )}
 
       {addOpen && activeDomain && (
-        <div className="modal-backdrop" role="presentation">
-          <section className="modal compact-modal" role="dialog" aria-modal="true" aria-label="添加记录">
-            <div className="modal-header">
-              <div>
-                <h2>添加记录</h2>
-                <p>
-                  {activeDomain.providerLabel} · {activeDomain.name}
-                </p>
-              </div>
-              <button className="icon-button" onClick={() => setAddOpen(false)} aria-label="关闭">
-                <CloseIcon />
-              </button>
-            </div>
-
-            <div className="modal-form two-column">
-              <label>
-                主机
-                <input
-                  value={recordForm.subDomain}
-                  onChange={(event) =>
-                    setRecordForm({ ...recordForm, subDomain: event.currentTarget.value })
-                  }
-                  placeholder="@ 或 www"
-                  spellCheck={false}
-                />
-              </label>
-              <label>
-                类型
-                <select
-                  value={recordForm.recordType}
-                  onChange={(event) =>
-                    setRecordForm({ ...recordForm, recordType: event.currentTarget.value })
-                  }
-                >
-                  {recordTypes.map((type) => (
-                    <option key={type}>{type}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                线路
-                <input
-                  value={recordForm.recordLine}
-                  onChange={(event) =>
-                    setRecordForm({ ...recordForm, recordLine: event.currentTarget.value })
-                  }
-                  placeholder={recordLinePlaceholder}
-                />
-              </label>
-              <label>
-                TTL
-                <input
-                  value={recordForm.ttl}
-                  onChange={(event) =>
-                    setRecordForm({ ...recordForm, ttl: event.currentTarget.value })
-                  }
-                  inputMode="numeric"
-                />
-              </label>
-              <label>
-                {weightFieldLabel}
-                <input
-                  value={recordForm.mx}
-                  onChange={(event) =>
-                    setRecordForm({ ...recordForm, mx: event.currentTarget.value })
-                  }
-                  inputMode="numeric"
-                />
-              </label>
-              <label>
-                状态
-                <select
-                  value={recordForm.status}
-                  onChange={(event) =>
-                    setRecordForm({
-                      ...recordForm,
-                      status: event.currentTarget.value as RecordForm["status"],
-                    })
-                  }
-                  disabled={activeDomain.provider === "cloudflare"}
-                >
-                  <option value="ENABLE">启用</option>
-                  <option value="DISABLE">暂停</option>
-                </select>
-              </label>
-              <label className="span-2">
-                记录值
-                <input
-                  value={recordForm.value}
-                  list="record-value-options"
-                  onChange={(event) =>
-                    setRecordForm({ ...recordForm, value: event.currentTarget.value })
-                  }
-                  placeholder="IP、CNAME、TXT 内容或其它记录值"
-                  spellCheck={false}
-                />
-              </label>
-              <label className="span-2">
-                备注
-                <textarea
-                  value={recordForm.remark}
-                  onChange={(event) =>
-                    setRecordForm({ ...recordForm, remark: event.currentTarget.value })
-                  }
-                  placeholder="内部备注，不影响 DNS 解析"
-                  spellCheck={false}
-                />
-              </label>
-            </div>
-
-            <div className="modal-footer">
-              <button className="secondary-button" onClick={() => setAddOpen(false)} disabled={busy !== null}>
-                取消
-              </button>
-              <button className="primary-button" onClick={createRecord} disabled={busy !== null || !desktopReady}>
-                {busy === "create" ? "添加中" : "添加记录"}
-              </button>
-            </div>
-          </section>
-        </div>
+        <AddRecordModal
+          domain={activeDomain}
+          form={recordForm}
+          busy={busy !== null}
+          creating={busy === "create"}
+          desktopReady={desktopReady}
+          onChange={(patch) => setRecordForm((current) => ({ ...current, ...patch }))}
+          onClose={() => setAddOpen(false)}
+          onCreate={createRecord}
+        />
       )}
     </main>
   );

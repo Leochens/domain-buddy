@@ -4,9 +4,13 @@
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-08-18
+
 ### Added
 
 - 完整接入阿里云 DNS，支持配置验证、域名同步、记录查询、增删改、备注和启停。
+- 支持按主机或记录值搜索解析记录，并按记录类型过滤。
+- 添加解析记录时展示每种记录类型的用途、记录值格式、示例和相关字段说明。
 
 ### Fixed
 
@@ -23,5 +27,6 @@
 - 使用操作系统凭证库存储敏感凭证，并限制请求到供应商官方 HTTPS Endpoint。
 - 开源许可证、协作指南、安全政策、行为准则、Issue / PR 模板与基础 CI。
 
-[Unreleased]: https://github.com/Leochens/domain-buddy/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Leochens/domain-buddy/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/Leochens/domain-buddy/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Leochens/domain-buddy/tree/v0.1.0
